@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="lexisGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#834832" />
+      <stop offset="100%" stop-color="#36160b" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="128" fill="url(#lexisGrad)" />
+  <path d="M160 140 H320 C340 140 356 156 356 176 V340 C356 356 340 372 320 372 H160" fill="none" stroke="#fdf8f6" stroke-width="28" stroke-linecap="round" />
+  <path d="M160 140 V372" fill="none" stroke="#fdf8f6" stroke-width="32" stroke-linecap="round" />
+  <path d="M220 220 H300 M220 280 H280" fill="none" stroke="#eaddd7" stroke-width="20" stroke-linecap="round" />
+  <circle cx="360" cy="140" r="16" fill="#d2bab0" />
+</svg>

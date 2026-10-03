@@ -1,0 +1,18 @@
+{
+  "name": "Lexis Engine — High-Register Vocabulary",
+  "short_name": "Lexis",
+  "description": "A high-register vocabulary acquisition system combining real-time LLM morphological enrichment and active FSRS recall.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fdf8f6",
+  "theme_color": "#834832",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
