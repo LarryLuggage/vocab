@@ -51,6 +51,9 @@ export interface VocabCard {
   source_context: SourceContext;
   cloze_sentences: string[];
   distinction_matrix?: DistinctionMatrix | null;
+  is_fallback?: boolean;
+  enrichment_source?: 'gemini' | 'openai' | 'curated' | 'dictionary' | 'offline-stub';
+  fallback_reason?: string;
   created_at: string;
 }
 

@@ -135,34 +135,59 @@ export async function enrichWordClientFallback(
     };
   }
 
+  // Attempt client-side dictionary lookup for real definitions
+  let clientDictDef: string | null = null;
+  let clientDictPos: string | null = null;
+  let clientDictPhonetic: string | null = null;
+
+  try {
+    const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(normalized)}`);
+    if (res.ok) {
+      const list = await res.json();
+      if (Array.isArray(list) && list.length > 0) {
+        const item = list[0];
+        clientDictPhonetic = item.phonetic || item.phonetics?.find((p: any) => p?.text)?.text || null;
+        const meaning = item.meanings?.[0];
+        clientDictPos = meaning?.partOfSpeech || null;
+        clientDictDef = meaning?.definitions?.[0]?.definition || null;
+      }
+    }
+  } catch {
+    // offline or blocked
+  }
+
   // Dynamic heuristic synthesis for unknown words
-  const isAdjective = /(ic|id|ous|al|ive|an)$/i.test(normalized);
+  const isAdjective = /(ic|id|ous|al|ive|an|ar)$/i.test(normalized);
   const isNoun = /(ism|tion|ty|or|er|ment)$/i.test(normalized);
-  const pos = isAdjective ? 'adjective' : isNoun ? 'noun' : 'verb';
+  const pos = clientDictPos || (isAdjective ? 'adjective' : isNoun ? 'noun' : 'verb');
+
+  const finalDefinition = clientDictDef || `A scholarly or literary ${pos}. (AI enrichment offline — verify GEMINI_API_KEY in Vercel settings).`;
+  const finalNuance = clientDictDef
+    ? 'Retrieved via dictionary fallback while AI service is reconnecting.'
+    : 'Captured in fallback mode. Verify GEMINI_API_KEY on Vercel for deep etymological parsing.';
 
   return {
     id: `card-${normalized}-${Date.now()}`,
     user_id: 'default-user',
     term: normalized,
     part_of_speech: pos,
-    phonetic: `/${normalized}/`,
-    primary_definition: `A distinctive ${pos} denoting high-register conceptual clarity or qualitative refinement.`,
-    nuance_note:
-      'Employed in scholarly, literary, or philosophical registers to delineate fine shades of meaning distinct from colloquial synonyms.',
+    phonetic: clientDictPhonetic || `/${normalized}/`,
+    primary_definition: finalDefinition,
+    nuance_note: finalNuance,
     etymology: {
       roots: [
         {
           morpheme: normalized.slice(0, Math.max(3, normalized.length - 3)),
-          meaning: 'to signify / articulate',
+          meaning: 'core semantic base',
           origin: normalized.includes('ph') || normalized.includes('ch') || normalized.includes('y') ? 'Greek' : 'Latin',
         },
       ],
       cognates: [`pre-${normalized}`, `${normalized}-like`],
     },
     collocations: [
-      `profound ${normalized}`,
-      `${normalized} implication`,
-      `distinctly ${normalized}`,
+      `${normalized} context`,
+      `scholarly ${normalized}`,
+      `nuanced ${normalized}`,
     ],
     source_context: {
       sentence: contextSentence || null,
@@ -184,6 +209,9 @@ export async function enrichWordClientFallback(
         },
       ],
     },
+    is_fallback: true,
+    enrichment_source: clientDictDef ? 'dictionary' : 'offline-stub',
+    fallback_reason: 'AI service unreachable',
     created_at: new Date().toISOString(),
   };
 }

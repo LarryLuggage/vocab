@@ -1,6 +1,7 @@
 import { ProductionEvaluationSchema, ProductionEvaluationPayload } from './schema';
 import { ProductionValidationResult } from '@/types/lexis';
 import { areTermsVariants } from '@/lib/db';
+import { getGeminiApiKey, extractJsonFromText } from './enricher';
 
 // ============================================================================
 // Built-in Deterministic Sentence Validator (ACT-03 Fallback)
@@ -115,8 +116,8 @@ async function evaluateWithGemini(
   userSentence: string,
   targetRegister?: string
 ): Promise<ProductionValidationResult | null> {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  if (!apiKey || apiKey === 'your-gemini-api-key' || apiKey === 'your-google-api-key') return null;
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) return null;
 
   const prompt = `You are a rigorous literary editor and stylistic judge evaluating a user's original sentence deploying the target vocabulary word: "${term}".
 Target register requested: "${targetRegister || 'High-register literary or academic'}".
@@ -136,28 +137,21 @@ Return a JSON object conforming strictly to this schema:
 }
 Output ONLY raw JSON.`;
 
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
+  const candidateModels = [
+    process.env.GEMINI_MODEL,
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+    'gemini-1.5-pro',
+  ].filter(Boolean) as string[];
+  const modelsToTry = Array.from(new Set(candidateModels));
 
-    const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-    let url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-    let response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          temperature: 0.2,
-        },
-      }),
-    });
+  for (const model of modelsToTry) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 7500);
 
-    if (response.status === 404 && model !== 'gemini-1.5-flash') {
-      url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-      response = await fetch(url, {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
@@ -169,26 +163,29 @@ Output ONLY raw JSON.`;
           },
         }),
       });
+      clearTimeout(timeout);
+
+      if (!response.ok) continue;
+      const json = await response.json();
+      const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) continue;
+
+      const parsed = extractJsonFromText(text);
+      if (!parsed) continue;
+
+      const validated = ProductionEvaluationSchema.parse(parsed);
+      return {
+        evaluationStatus: validated.evaluationStatus,
+        feedback: validated.feedback,
+        revisedSentence: validated.revisedSentence || undefined,
+        registerDetected: validated.registerDetected,
+      };
+    } catch (err: any) {
+      console.warn(`[Gemini Validator] Model ${model} failed:`, err?.message || err);
     }
-    clearTimeout(timeout);
-
-    if (!response.ok) return null;
-    const json = await response.json();
-    const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) return null;
-
-    const parsed = JSON.parse(text);
-    const validated = ProductionEvaluationSchema.parse(parsed);
-    return {
-      evaluationStatus: validated.evaluationStatus,
-      feedback: validated.feedback,
-      revisedSentence: validated.revisedSentence || undefined,
-      registerDetected: validated.registerDetected,
-    };
-  } catch (err) {
-    console.warn('[Gemini Validator] Evaluation failed or timed out:', err);
-    return null;
   }
+
+  return null;
 }
 
 // ============================================================================

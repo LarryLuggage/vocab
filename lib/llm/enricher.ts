@@ -1,10 +1,8 @@
 import {
   LexicalEnrichmentSchema,
   LexicalEnrichmentPayload,
-  EtymologyRootSchema,
 } from './schema';
 import { CURATED_LEXICON } from './curated-lexicon';
-import { z } from 'zod';
 
 // ============================================================================
 // Common Morphological Knowledge Base (Greek & Latin)
@@ -109,12 +107,111 @@ const COMMON_SUFFIXES: MorphemeEntry[] = [
 ];
 
 // ============================================================================
+// Helper Utilities: API Key Detection & Robust JSON Extraction
+// ============================================================================
+export function getGeminiApiKey(): string | null {
+  const envKeys = [
+    process.env.GEMINI_API_KEY,
+    process.env.GOOGLE_API_KEY,
+    process.env.NEXT_PUBLIC_GEMINI_API_KEY,
+    process.env.GOOGLE_AI_KEY,
+    process.env.GEMINI_KEY,
+  ];
+
+  for (const raw of envKeys) {
+    if (raw && typeof raw === 'string') {
+      const trimmed = raw.trim().replace(/^["']|["']$/g, '');
+      if (trimmed && !trimmed.startsWith('your-') && trimmed.length > 5) {
+        return trimmed;
+      }
+    }
+  }
+  return null;
+}
+
+export function extractJsonFromText(rawText: string): any {
+  if (!rawText || typeof rawText !== 'string') return null;
+  let text = rawText.trim();
+
+  // Strip markdown code fences if wrapped in ```json ... ``` or ``` ... ```
+  if (text.startsWith('```')) {
+    text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  }
+
+  // Find boundaries of outer JSON object
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start !== -1 && end !== -1 && end > start) {
+    text = text.slice(start, end + 1);
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function escapeRegExp(string: string): string {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// ============================================================================
+// Public Real Dictionary Fallback (Free Dictionary API)
+// ============================================================================
+export interface DictionaryApiResponse {
+  partOfSpeech: string;
+  phonetic: string | null;
+  definition: string;
+  example?: string;
+  synonyms: string[];
+}
+
+export async function fetchDictionaryFallback(term: string): Promise<DictionaryApiResponse | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    const res = await fetch(
+      `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(term.toLowerCase().trim())}`,
+      { signal: controller.signal }
+    );
+    clearTimeout(timer);
+    if (!res.ok) return null;
+
+    const list = await res.json();
+    if (!Array.isArray(list) || list.length === 0) return null;
+
+    const first = list[0];
+    const phonetic = first.phonetic || first.phonetics?.find((p: any) => p?.text)?.text || null;
+    const meaning = first.meanings?.[0];
+    const partOfSpeech = meaning?.partOfSpeech || 'noun';
+    const defItem = meaning?.definitions?.[0];
+    const definition = defItem?.definition;
+    if (!definition) return null;
+
+    const example = defItem?.example;
+    const synonyms = Array.isArray(meaning?.synonyms) ? meaning.synonyms.slice(0, 3) : [];
+
+    return {
+      partOfSpeech,
+      phonetic,
+      definition,
+      example,
+      synonyms,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================================
 // Built-in Intelligent Fallback Lexical Synthesizer
 // ============================================================================
 export function synthesizeLexicalFallback(
   rawTerm: string,
   contextSentence?: string,
-  source?: string
+  source?: string,
+  dictData?: DictionaryApiResponse | null
 ): LexicalEnrichmentPayload {
   const term = rawTerm.trim().toLowerCase();
 
@@ -146,6 +243,8 @@ export function synthesizeLexicalFallback(
       ...curated,
       source_context: sourceContext,
       cloze_sentences: clozeSentences,
+      is_fallback: false,
+      enrichment_source: 'curated',
     });
   }
 
@@ -171,25 +270,28 @@ export function synthesizeLexicalFallback(
     }
   }
 
-  // Match suffixes & infer POS
-  let partOfSpeech = 'noun';
-  if (term.endsWith('ly')) {
-    partOfSpeech = 'adverb';
-  } else if (
-    term.endsWith('ous') ||
-    term.endsWith('ic') ||
-    term.endsWith('al') ||
-    term.endsWith('ive') ||
-    term.endsWith('able') ||
-    term.endsWith('ible') ||
-    term.endsWith('ent') ||
-    term.endsWith('ant')
-  ) {
-    partOfSpeech = 'adjective';
-  } else if (term.endsWith('ize') || term.endsWith('ise') || term.endsWith('fy')) {
-    partOfSpeech = 'verb';
-  } else if (term.endsWith('ate')) {
-    partOfSpeech = 'adjective';
+  // Match suffixes & infer POS (or prefer real dictionary POS)
+  let partOfSpeech = dictData?.partOfSpeech || 'noun';
+  if (!dictData?.partOfSpeech) {
+    if (term.endsWith('ly')) {
+      partOfSpeech = 'adverb';
+    } else if (
+      term.endsWith('ous') ||
+      term.endsWith('ic') ||
+      term.endsWith('al') ||
+      term.endsWith('ive') ||
+      term.endsWith('able') ||
+      term.endsWith('ible') ||
+      term.endsWith('ent') ||
+      term.endsWith('ant') ||
+      term.endsWith('ar')
+    ) {
+      partOfSpeech = 'adjective';
+    } else if (term.endsWith('ize') || term.endsWith('ise') || term.endsWith('fy')) {
+      partOfSpeech = 'verb';
+    } else if (term.endsWith('ate')) {
+      partOfSpeech = 'adjective';
+    }
   }
 
   for (const s of COMMON_SUFFIXES) {
@@ -203,20 +305,38 @@ export function synthesizeLexicalFallback(
   if (identifiedRoots.length === 0) {
     identifiedRoots.push({
       morpheme: term.slice(0, Math.min(5, term.length)),
-      meaning: 'core semantic base',
-      origin: 'Latin',
+      meaning: 'root morpheme',
+      origin: 'Latin / Greek',
     });
   }
 
   const capitalizedTerm = rawTerm.charAt(0).toUpperCase() + rawTerm.slice(1);
-  const primaryDefinition = `Pertaining to or embodying ${term}; characterized by refined intellectual or stylistic expression.`;
-  const nuanceNote = `Denotes nuanced register with scholarly or formal elevation; emphasizes deliberate precision over colloquial approximation.`;
-  const collocations = [
-    `deep ${term}`,
-    `${term} analysis`,
-    `inherent ${term}`,
-    `subtle ${term}`,
-  ];
+
+  // REAL DEFINITIONS: If dictionary returned data, use verified dictionary definition!
+  let primaryDefinition: string;
+  let nuanceNote: string;
+  let isFallback = true;
+  let enrichmentSource = 'dictionary';
+  let fallbackReason = 'AI service offline / fallback mode';
+
+  if (dictData?.definition) {
+    primaryDefinition = dictData.definition;
+    nuanceNote = `Retrieved from dictionary fallback while AI service is reconnecting. Conveys nuanced academic register.`;
+    enrichmentSource = 'dictionary';
+  } else if (identifiedRoots.length > 0 && identifiedRoots[0].meaning !== 'root morpheme') {
+    const rootSummary = identifiedRoots.map((r) => `${r.morpheme} (${r.meaning})`).join(', ');
+    primaryDefinition = `A literary or scholarly ${partOfSpeech} derived from ${rootSummary}. (AI service was unreachable — check GEMINI_API_KEY).`;
+    nuanceNote = `Identified morphological roots: ${rootSummary}.`;
+    enrichmentSource = 'offline-heuristic';
+  } else {
+    primaryDefinition = `A specialized literary or academic term. (AI service was unreachable — verify GEMINI_API_KEY in Vercel settings).`;
+    nuanceNote = `Captured in fallback mode. Verify GEMINI_API_KEY on Vercel to enable full etymological analysis.`;
+    enrichmentSource = 'offline-stub';
+  }
+
+  const collocations = dictData?.synonyms && dictData.synonyms.length > 0
+    ? dictData.synonyms.map((s) => `${term} / ${s}`)
+    : [`${term} context`, `scholarly ${term}`, `nuanced ${term}`];
 
   const clozeSentences: string[] = [];
   if (contextSentence && contextSentence.trim()) {
@@ -224,28 +344,30 @@ export function synthesizeLexicalFallback(
     if (regex.test(contextSentence)) {
       clozeSentences.push(contextSentence.replace(regex, (match) => `{{c1::${match}}}`));
     } else {
-      clozeSentences.push(`The author emphasized the {{c1::${term}}} in the concluding monograph.`);
+      clozeSentences.push(`The author deployed the concept of {{c1::${term}}} in the concluding monograph.`);
+    }
+  } else if (dictData?.example) {
+    const regex = new RegExp(`\\b${escapeRegExp(term)}[a-z]*\\b`, 'i');
+    if (regex.test(dictData.example)) {
+      clozeSentences.push(dictData.example.replace(regex, (match) => `{{c1::${match}}}`));
+    } else {
+      clozeSentences.push(dictData.example);
     }
   } else {
     clozeSentences.push(
-      `The critical treatise examined the {{c1::${term}}} underlying modern institutional discourse.`,
-      `Her appraisal revealed an unmistakable {{c1::${term}}} that distinguished the work from routine analysis.`
+      `The critical treatise examined the {{c1::${term}}} underlying modern discourse.`,
+      `Her appraisal revealed an unmistakable {{c1::${term}}} that characterized the work.`
     );
   }
 
   const distinctionMatrix = {
-    synonyms: [term, `${term}-adjacent`, 'counterpart'],
-    nuanceComparison: `${capitalizedTerm} conveys high-register precision, distinguishing it from conventional near-synonyms by structural emphasis.`,
+    synonyms: [term, ...(dictData?.synonyms || ['counterpart'])],
+    nuanceComparison: `${capitalizedTerm} denotes elevated precision in literary or scholarly prose.`,
     contextRecommendations: [
       {
         word: term,
         recommendedRegister: 'Scholarly / Critical Prose',
         exampleSentence: `An incisive application of ${term} in peer-reviewed discourse.`,
-      },
-      {
-        word: `${term}-equivalent`,
-        recommendedRegister: 'General Literary',
-        exampleSentence: `A broader colloquial phrasing in narrative prose.`,
       },
     ],
   };
@@ -253,7 +375,7 @@ export function synthesizeLexicalFallback(
   const payload: LexicalEnrichmentPayload = {
     term: rawTerm.trim(),
     part_of_speech: partOfSpeech,
-    phonetic: `/${term}/`,
+    phonetic: dictData?.phonetic || `/${term}/`,
     primary_definition: primaryDefinition,
     nuance_note: nuanceNote,
     etymology: {
@@ -267,13 +389,12 @@ export function synthesizeLexicalFallback(
     },
     cloze_sentences: clozeSentences,
     distinction_matrix: distinctionMatrix,
+    is_fallback: isFallback,
+    enrichment_source: enrichmentSource,
+    fallback_reason: fallbackReason,
   };
 
   return LexicalEnrichmentSchema.parse(payload);
-}
-
-function escapeRegExp(string: string): string {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // ============================================================================
@@ -284,8 +405,11 @@ async function fetchGeminiEnrichment(
   contextSentence?: string,
   source?: string
 ): Promise<LexicalEnrichmentPayload | null> {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  if (!apiKey || apiKey === 'your-gemini-api-key' || apiKey === 'your-google-api-key') return null;
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) {
+    console.warn('[Gemini API] No valid API key found in environment.');
+    return null;
+  }
 
   const prompt = `You are a world-class lexicographer and etymologist. Analyze the target vocabulary word "${term}".
 ${contextSentence ? `Context sentence provided by user: "${contextSentence}"` : ''}
@@ -325,28 +449,21 @@ Return a valid JSON object matching this schema:
 }
 Respond with ONLY raw JSON.`;
 
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
+  const candidateModels = [
+    process.env.GEMINI_MODEL,
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+    'gemini-1.5-pro',
+  ].filter(Boolean) as string[];
+  const modelsToTry = Array.from(new Set(candidateModels));
 
-    const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-    let url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-    let response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          temperature: 0.2,
-        },
-      }),
-    });
+  for (const model of modelsToTry) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 7500);
 
-    if (response.status === 404 && model !== 'gemini-1.5-flash') {
-      url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-      response = await fetch(url, {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
@@ -358,24 +475,32 @@ Respond with ONLY raw JSON.`;
           },
         }),
       });
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        const errorBody = await response.text().catch(() => '');
+        console.warn(`[Gemini API] Model ${model} returned HTTP ${response.status}:`, errorBody);
+        continue;
+      }
+
+      const json = await response.json();
+      const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!rawText) continue;
+
+      const parsedJson = extractJsonFromText(rawText);
+      if (!parsedJson) continue;
+
+      return LexicalEnrichmentSchema.parse({
+        ...parsedJson,
+        is_fallback: false,
+        enrichment_source: 'gemini',
+      });
+    } catch (err: any) {
+      console.warn(`[Gemini API] Request with model ${model} failed:`, err?.message || err);
     }
-    clearTimeout(timeout);
-
-    if (!response.ok) {
-      console.warn(`[Gemini API] Request returned status ${response.status}`);
-      return null;
-    }
-
-    const json = await response.json();
-    const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!rawText) return null;
-
-    const parsedJson = JSON.parse(rawText);
-    return LexicalEnrichmentSchema.parse(parsedJson);
-  } catch (err) {
-    console.warn('[Gemini API] Request failed or timed out:', err);
-    return null;
   }
+
+  return null;
 }
 
 // ============================================================================
@@ -386,7 +511,7 @@ async function fetchOpenAIEnrichment(
   contextSentence?: string,
   source?: string
 ): Promise<LexicalEnrichmentPayload | null> {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey || apiKey === 'your-openai-api-key') return null;
 
   const prompt = `You are an expert lexicographer. Return structured JSON for the vocabulary term "${term}".
@@ -397,7 +522,7 @@ Include term, part_of_speech, phonetic, primary_definition, nuance_note, etymolo
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3500);
+    const timeout = setTimeout(() => controller.abort(), 4500);
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -426,8 +551,14 @@ Include term, part_of_speech, phonetic, primary_definition, nuance_note, etymolo
     const rawContent = json.choices?.[0]?.message?.content;
     if (!rawContent) return null;
 
-    const parsed = JSON.parse(rawContent);
-    return LexicalEnrichmentSchema.parse(parsed);
+    const parsed = extractJsonFromText(rawContent);
+    if (!parsed) return null;
+
+    return LexicalEnrichmentSchema.parse({
+      ...parsed,
+      is_fallback: false,
+      enrichment_source: 'openai',
+    });
   } catch (err) {
     console.warn('[OpenAI API] Request failed or timed out:', err);
     return null;
@@ -455,6 +586,9 @@ export async function enrichWord(
   const openAiResult = await fetchOpenAIEnrichment(trimmed, contextSentence, source);
   if (openAiResult) return openAiResult;
 
-  // 3. Fall back to built-in intelligent lexical synthesizer
-  return synthesizeLexicalFallback(trimmed, contextSentence, source);
+  // 3. Try Public Dictionary API for real definition
+  const dictData = await fetchDictionaryFallback(trimmed);
+
+  // 4. Fall back to intelligent lexical synthesizer (with verified dictionary data if available)
+  return synthesizeLexicalFallback(trimmed, contextSentence, source, dictData);
 }

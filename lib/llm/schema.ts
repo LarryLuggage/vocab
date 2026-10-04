@@ -43,11 +43,14 @@ export const LexicalEnrichmentSchema = z.object({
   phonetic: z.string().nullable().optional(),
   primary_definition: z.string().min(1, 'Primary definition is required'),
   nuance_note: z.string().nullable().optional(),
-  etymology: EtymologySchema,
-  collocations: z.array(z.string()),
+  etymology: EtymologySchema.optional().default({ roots: [], cognates: [] }),
+  collocations: z.array(z.string()).optional().default([]),
   source_context: SourceContextSchema.optional().default({ sentence: null, source: null }),
-  cloze_sentences: z.array(z.string()).min(1, 'At least one cloze sentence is required'),
+  cloze_sentences: z.array(z.string()).optional().default([]),
   distinction_matrix: DistinctionMatrixSchema.nullable().optional(),
+  is_fallback: z.boolean().optional(),
+  enrichment_source: z.string().optional(),
+  fallback_reason: z.string().nullable().optional(),
 });
 
 export type LexicalEnrichmentPayload = z.infer<typeof LexicalEnrichmentSchema>;

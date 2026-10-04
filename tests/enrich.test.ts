@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { LexicalEnrichmentSchema, EtymologySchema } from '@/lib/llm/schema';
-import { enrichWord, synthesizeLexicalFallback } from '@/lib/llm/enricher';
+import { LexicalEnrichmentSchema } from '@/lib/llm/schema';
+import {
+  enrichWord,
+  synthesizeLexicalFallback,
+  extractJsonFromText,
+  getGeminiApiKey,
+} from '@/lib/llm/enricher';
 
 describe('Lexical Schema & Enrichment Engine (ING-02)', () => {
   it('validates a well-formed lexical schema payload', () => {
@@ -42,14 +47,12 @@ describe('Lexical Schema & Enrichment Engine (ING-02)', () => {
     expect(parsed.success).toBe(true);
   });
 
-  it('rejects an invalid payload with missing required fields or empty cloze', () => {
+  it('rejects an invalid payload with missing required fields', () => {
     const invalidData = {
       term: '', // empty term should fail
       part_of_speech: 'noun',
       primary_definition: 'Something',
       etymology: { roots: [], cognates: [] },
-      collocations: [],
-      cloze_sentences: [], // empty cloze should fail
     };
 
     const parsed = LexicalEnrichmentSchema.safeParse(invalidData);
@@ -82,7 +85,7 @@ describe('Lexical Schema & Enrichment Engine (ING-02)', () => {
     expect(enriched.cloze_sentences.some((s) => s.includes('{{c1::inchoate}}'))).toBe(true);
   });
 
-  it('synthesizes novel uncurated word using morphological knowledge base', async () => {
+  it('synthesizes novel uncurated word using morphological knowledge base without tautologies', async () => {
     const novelWord = 'antipathy';
     const fallback = synthesizeLexicalFallback(novelWord);
 
@@ -94,17 +97,50 @@ describe('Lexical Schema & Enrichment Engine (ING-02)', () => {
     expect(fallback.cloze_sentences.length).toBeGreaterThan(0);
     expect(fallback.cloze_sentences[0]).toContain('{{c1::antipathy}}');
 
+    // Never produces the removed tautological template "Pertaining to or embodying..."
+    expect(fallback.primary_definition).not.toContain('Pertaining to or embodying');
+    expect(fallback.is_fallback).toBe(true);
+
     // Must strictly satisfy the Zod schema
     const validation = LexicalEnrichmentSchema.safeParse(fallback);
     expect(validation.success).toBe(true);
   });
 
-  it('handles adjectives with -ous suffix and synthesizes proper part of speech', async () => {
+  it('handles adjectives with -ar and -ous suffix and synthesizes proper part of speech', async () => {
     const word = 'tenacious';
     const fallback = synthesizeLexicalFallback(word);
 
     expect(fallback.part_of_speech).toBe('adjective');
     expect(fallback.cloze_sentences[0]).toContain('{{c1::tenacious}}');
+    expect(fallback.primary_definition).not.toContain('Pertaining to or embodying');
     expect(LexicalEnrichmentSchema.safeParse(fallback).success).toBe(true);
+  });
+
+  it('correctly extracts JSON from raw strings with markdown fences and conversational framing', () => {
+    const fencedMarkdown = '```json\n{\n  "term": "homuncular",\n  "part_of_speech": "adjective"\n}\n```';
+    const parsedFenced = extractJsonFromText(fencedMarkdown);
+    expect(parsedFenced).toEqual({ term: 'homuncular', part_of_speech: 'adjective' });
+
+    const framedText = 'Here is the JSON you requested:\n{\n  "term": "inchoate",\n  "valid": true\n}\nHope this helps!';
+    const parsedFramed = extractJsonFromText(framedText);
+    expect(parsedFramed).toEqual({ term: 'inchoate', valid: true });
+  });
+
+  it('incorporates real dictionary payload when available in synthesizeLexicalFallback', () => {
+    const dictData = {
+      partOfSpeech: 'adjective',
+      phonetic: '/həˈmʌŋkjʊlə/',
+      definition: 'Of or resembling a homunculus; miniature, tiny.',
+      example: 'The homuncular figure stood quietly on the shelf.',
+      synonyms: ['miniature', 'diminutive'],
+    };
+
+    const fallback = synthesizeLexicalFallback('homuncular', undefined, undefined, dictData);
+    expect(fallback.primary_definition).toBe('Of or resembling a homunculus; miniature, tiny.');
+    expect(fallback.part_of_speech).toBe('adjective');
+    expect(fallback.phonetic).toBe('/həˈmʌŋkjʊlə/');
+    expect(fallback.is_fallback).toBe(true);
+    expect(fallback.enrichment_source).toBe('dictionary');
+    expect(fallback.primary_definition).not.toContain('Pertaining to or embodying');
   });
 });

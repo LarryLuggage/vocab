@@ -174,6 +174,9 @@ export default function QuickCapturePage() {
               },
               cloze_sentences: raw.cloze_sentences || [],
               distinction_matrix: raw.distinction_matrix || null,
+              is_fallback: Boolean(raw.is_fallback),
+              enrichment_source: raw.enrichment_source || (raw.is_fallback ? 'dictionary' : 'gemini'),
+              fallback_reason: raw.fallback_reason || null,
             };
           }
         }
@@ -519,13 +522,39 @@ export default function QuickCapturePage() {
               </div>
             </div>
 
-            {finalLatency !== null && (
+            {previewCard.is_fallback ? (
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-sans font-medium bg-amber-50 text-amber-900 border border-amber-300 self-start">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-700" />
+                <span>
+                  {previewCard.enrichment_source === 'dictionary'
+                    ? 'Dictionary Fallback'
+                    : 'Offline Fallback'}
+                </span>
+              </div>
+            ) : finalLatency !== null ? (
               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-medium bg-emerald-50 text-emerald-800 border border-emerald-200 self-start">
-                <Timer className="w-3.5 h-3.5 text-emerald-600" />
+                <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
                 <span>Enriched in {(finalLatency / 1000).toFixed(2)}s</span>
               </div>
-            )}
+            ) : null}
           </div>
+
+          {/* Fallback Notice Banner */}
+          {previewCard.is_fallback && (
+            <div className="p-3.5 bg-amber-50/80 border border-amber-200 rounded-xl text-xs font-sans text-amber-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+              <span className="leading-relaxed">
+                <strong>Notice:</strong> AI service offline or unconfigured on Vercel. Definition retrieved via factual dictionary fallback.
+              </span>
+              <a
+                href="/api/diagnostic"
+                target="_blank"
+                rel="noreferrer"
+                className="underline font-semibold text-amber-900 shrink-0 hover:text-amber-700 inline-flex items-center gap-1"
+              >
+                Inspect Diagnostics →
+              </a>
+            </div>
+          )}
 
           {/* Primary Definition */}
           <div className="space-y-1.5">

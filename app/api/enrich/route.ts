@@ -31,6 +31,9 @@ export async function POST(req: NextRequest) {
       },
       cloze_sentences: payload.cloze_sentences,
       distinction_matrix: payload.distinction_matrix || null,
+      is_fallback: payload.is_fallback,
+      enrichment_source: payload.enrichment_source,
+      fallback_reason: payload.fallback_reason,
     };
 
     return NextResponse.json({ success: true, data: payload, card }, { status: 200 });
