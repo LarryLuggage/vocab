@@ -109,15 +109,35 @@ export default function QuickCapturePage() {
         });
 
         if (res.ok) {
-          const data = await res.json();
-          enriched = data.card || data;
+          const json = await res.json();
+          const raw = json.card || json.data || (json.term ? json : null);
+          if (raw && (raw.term || raw.primary_definition)) {
+            enriched = {
+              id: raw.id || `card-${(raw.term || cleanTerm).toLowerCase()}-${Date.now()}`,
+              user_id: raw.user_id || 'default-user',
+              created_at: raw.created_at || new Date().toISOString(),
+              term: raw.term || cleanTerm,
+              part_of_speech: raw.part_of_speech || 'noun',
+              phonetic: raw.phonetic || null,
+              primary_definition: raw.primary_definition || '',
+              nuance_note: raw.nuance_note || null,
+              etymology: raw.etymology || { roots: [], cognates: [] },
+              collocations: raw.collocations || [],
+              source_context: raw.source_context || {
+                sentence: contextSentence.trim() || null,
+                source: null,
+              },
+              cloze_sentences: raw.cloze_sentences || [],
+              distinction_matrix: raw.distinction_matrix || null,
+            };
+          }
         }
       } catch {
         // Network / server not available - fallback gracefully
       }
 
-      // If backend was not reached or returned error, use smart client fallback
-      if (!enriched) {
+      // If backend was not reached or returned incomplete data, use smart client fallback
+      if (!enriched || !enriched.primary_definition) {
         // Add small realistic delay to showcase the smooth latency gauge
         await new Promise((r) => setTimeout(r, 650));
         enriched = await enrichWordClientFallback(cleanTerm, contextSentence.trim());

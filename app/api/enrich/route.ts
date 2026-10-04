@@ -14,7 +14,26 @@ export async function POST(req: NextRequest) {
     }
 
     const payload = await enrichWord(term.trim(), contextSentence, source);
-    return NextResponse.json({ success: true, data: payload }, { status: 200 });
+    const card = {
+      id: `card-${payload.term.toLowerCase()}-${Date.now()}`,
+      user_id: 'default-user',
+      created_at: new Date().toISOString(),
+      term: payload.term,
+      part_of_speech: payload.part_of_speech,
+      phonetic: payload.phonetic || null,
+      primary_definition: payload.primary_definition,
+      nuance_note: payload.nuance_note || null,
+      etymology: payload.etymology,
+      collocations: payload.collocations,
+      source_context: payload.source_context || {
+        sentence: contextSentence || null,
+        source: source || null,
+      },
+      cloze_sentences: payload.cloze_sentences,
+      distinction_matrix: payload.distinction_matrix || null,
+    };
+
+    return NextResponse.json({ success: true, data: payload, card }, { status: 200 });
   } catch (error: any) {
     console.error('[API /api/enrich] Error:', error);
     return NextResponse.json(
