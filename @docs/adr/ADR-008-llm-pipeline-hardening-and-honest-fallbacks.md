@@ -20,7 +20,7 @@ Root cause analysis revealed that this was not an AI model hallucination:
 3. **Hardened LLM Pipeline**:
    - Check all environment variable aliases (`GEMINI_API_KEY`, `GOOGLE_API_KEY`, `NEXT_PUBLIC_GEMINI_API_KEY`, `GOOGLE_AI_KEY`, `GEMINI_KEY`), trimming whitespace and quotes.
    - Robust JSON extraction (`extractJsonFromText`) stripping markdown code blocks (````json ... ````) and conversational text before parsing.
-   - Resilient multi-model cascading: `gemini-2.0-flash` $\rightarrow$ `gemini-1.5-flash` $\rightarrow$ `gemini-1.5-pro`.
+   - Resilient multi-model cascading: `gemini-3.8-flash` (current Google v1beta flagship) $\rightarrow$ `gemini-2.5-flash` $\rightarrow$ dynamic models from `ModelService.ListModels`.
    - Increased timeout from 4.0s to 7.5s to accommodate serverless cold starts.
 4. **Diagnostic Route (`/api/diagnostic`)**:
    - Provide a live inspection endpoint returning sanitized environment key presence, active Vercel environment, and real-time connectivity probe results from Google Gemini.
