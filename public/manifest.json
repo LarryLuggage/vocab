@@ -1,7 +1,7 @@
 {
-  "name": "Lexis Engine — High-Register Vocabulary",
+  "name": "Lexis Engine — Personal Vocabulary OS",
   "short_name": "Lexis",
-  "description": "A high-register vocabulary acquisition system combining real-time LLM morphological enrichment and active FSRS recall.",
+  "description": "A high-register personal vocabulary operating system with real-time morphological enrichment and active FSRS recall.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#fdf8f6",
@@ -14,5 +14,14 @@
       "type": "image/svg+xml",
       "purpose": "any maskable"
     }
-  ]
+  ],
+  "share_target": {
+    "action": "/add",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  }
 }

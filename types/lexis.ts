@@ -12,6 +12,18 @@ export interface Etymology {
 export interface SourceContext {
   sentence: string | null;
   source: string | null;
+  author?: string | null;
+  page?: string | null;
+  url?: string | null;
+}
+
+export interface IngestRequestPayload {
+  term: string;
+  contextSentence?: string;
+  source?: string;
+  author?: string;
+  page?: string;
+  url?: string;
 }
 
 export interface DistinctionMatrixItem {

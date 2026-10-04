@@ -23,6 +23,7 @@ import {
   addOrUpdateClientCard,
 } from '@/lib/sample-data';
 import { enrichWordClientFallback } from '@/lib/enrichment-fallback';
+import { parseZoteroCitation } from '@/lib/zotero-parser';
 import { cn } from '@/lib/utils';
 
 export default function QuickCapturePage() {
@@ -32,6 +33,10 @@ export default function QuickCapturePage() {
   // Form inputs
   const [term, setTerm] = useState('');
   const [contextSentence, setContextSentence] = useState('');
+  const [source, setSource] = useState('');
+  const [author, setAuthor] = useState('');
+  const [page, setPage] = useState('');
+  const [showSourceFields, setShowSourceFields] = useState(false);
 
   // Processing state
   const [isLoading, setIsLoading] = useState(false);
@@ -44,9 +49,43 @@ export default function QuickCapturePage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Autofocus word input on mount
+  // Autofocus word input on mount & detect Android Web Share Target params
   useEffect(() => {
     inputRef.current?.focus();
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const incomingText = params.get('text');
+      const incomingTitle = params.get('title');
+      const incomingUrl = params.get('url');
+
+      if (incomingText) {
+        const parsed = parseZoteroCitation(incomingText);
+        if (parsed.targetTerm) {
+          setTerm(parsed.targetTerm);
+        } else if (!incomingText.includes(' ') && incomingText.length > 1) {
+          setTerm(incomingText);
+        }
+        if (parsed.cleanedSentence && parsed.cleanedSentence !== parsed.targetTerm) {
+          setContextSentence(parsed.cleanedSentence);
+        }
+        if (parsed.author) {
+          setAuthor(parsed.author);
+          setShowSourceFields(true);
+        }
+        if (parsed.sourceTitle) {
+          setSource(parsed.sourceTitle);
+          setShowSourceFields(true);
+        } else if (incomingTitle) {
+          setSource(incomingTitle);
+          setShowSourceFields(true);
+        }
+        if (parsed.page) {
+          setPage(parsed.page);
+          setShowSourceFields(true);
+        }
+      }
+    }
   }, []);
 
   // Latency timer effect
@@ -105,6 +144,9 @@ export default function QuickCapturePage() {
           body: JSON.stringify({
             term: cleanTerm,
             contextSentence: contextSentence.trim() || undefined,
+            source: source.trim() || undefined,
+            author: author.trim() || undefined,
+            page: page.trim() || undefined,
           }),
         });
 
@@ -123,9 +165,12 @@ export default function QuickCapturePage() {
               nuance_note: raw.nuance_note || null,
               etymology: raw.etymology || { roots: [], cognates: [] },
               collocations: raw.collocations || [],
-              source_context: raw.source_context || {
-                sentence: contextSentence.trim() || null,
-                source: null,
+              source_context: {
+                sentence: contextSentence.trim() || raw.source_context?.sentence || null,
+                source: source.trim() || raw.source_context?.source || null,
+                author: author.trim() || raw.source_context?.author || null,
+                page: page.trim() || raw.source_context?.page || null,
+                url: null,
               },
               cloze_sentences: raw.cloze_sentences || [],
               distinction_matrix: raw.distinction_matrix || null,
@@ -304,6 +349,64 @@ export default function QuickCapturePage() {
               placeholder="e.g. Her prose was so pellucid that even the most Byzantine philosophical abstractions seemed immediately graspable."
               className="w-full text-sm font-serif text-[#1c1917] bg-[#fdf8f6]/30 border border-[#e7e5e4] rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-[#834832] focus:border-transparent transition-all placeholder:text-[#a8a29e]"
             />
+          </div>
+
+          {/* Reading Source & Citation (Zotero) */}
+          <div className="space-y-3 pt-1">
+            <button
+              type="button"
+              onClick={() => setShowSourceFields((prev) => !prev)}
+              className="text-xs font-sans font-medium text-[#834832] hover:text-[#693522] flex items-center gap-1.5 transition-colors"
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>
+                {showSourceFields ? 'Hide Citation & Reading Source' : '+ Add Reading Source / Zotero Citation'}
+              </span>
+            </button>
+
+            {showSourceFields && (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 bg-[#fdf8f6]/70 border border-[#eaddd7] rounded-xl animate-in fade-in">
+                <div className="space-y-1 sm:col-span-1">
+                  <label htmlFor="source-author" className="block text-[11px] font-sans font-semibold text-[#78716c] uppercase">
+                    Author
+                  </label>
+                  <input
+                    id="source-author"
+                    type="text"
+                    value={author}
+                    onChange={(e) => setAuthor(e.target.value)}
+                    placeholder="e.g. Theodor Adorno"
+                    className="w-full text-xs font-serif text-[#1c1917] bg-white border border-[#e7e5e4] rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-[#834832]"
+                  />
+                </div>
+                <div className="space-y-1 sm:col-span-1">
+                  <label htmlFor="source-title" className="block text-[11px] font-sans font-semibold text-[#78716c] uppercase">
+                    Book / Article Title
+                  </label>
+                  <input
+                    id="source-title"
+                    type="text"
+                    value={source}
+                    onChange={(e) => setSource(e.target.value)}
+                    placeholder="e.g. Negative Dialectics"
+                    className="w-full text-xs font-serif text-[#1c1917] bg-white border border-[#e7e5e4] rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-[#834832]"
+                  />
+                </div>
+                <div className="space-y-1 sm:col-span-1">
+                  <label htmlFor="source-page" className="block text-[11px] font-sans font-semibold text-[#78716c] uppercase">
+                    Page / Location
+                  </label>
+                  <input
+                    id="source-page"
+                    type="text"
+                    value={page}
+                    onChange={(e) => setPage(e.target.value)}
+                    placeholder="e.g. p. 112"
+                    className="w-full text-xs font-serif text-[#1c1917] bg-white border border-[#e7e5e4] rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-[#834832]"
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Action Trigger Button */}

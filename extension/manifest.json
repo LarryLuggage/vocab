@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "Lexis Engine — Quick Capture",
+  "version": "1.0.0",
+  "description": "Capture vocabulary words and context sentences while reading into your personal Lexis Engine.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    },
+    "default_title": "Lexis Engine"
+  },
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "permissions": [
+    "contextMenus",
+    "storage",
+    "activeTab",
+    "scripting",
+    "notifications"
+  ],
+  "commands": {
+    "capture-selection": {
+      "suggested_key": {
+        "default": "Alt+L",
+        "mac": "Command+Shift+L"
+      },
+      "description": "Capture selected word to Lexis"
+    }
+  }
+}

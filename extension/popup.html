@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lexis Engine</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 360px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #fbf9f5;
+      color: #1c1917;
+      padding: 16px;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #e7e5e4;
+      padding-bottom: 12px;
+      margin-bottom: 14px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .badge-icon {
+      width: 24px;
+      height: 24px;
+      background: #834832;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fdf8f6;
+      font-weight: bold;
+      font-size: 13px;
+      font-family: Georgia, serif;
+    }
+    h1 {
+      font-family: Georgia, serif;
+      font-size: 16px;
+      font-weight: 700;
+      color: #1c1917;
+      letter-spacing: 0.5px;
+    }
+    .header-links a {
+      color: #78716c;
+      text-decoration: none;
+      font-size: 12px;
+      margin-left: 8px;
+    }
+    .header-links a:hover { color: #834832; }
+    .field {
+      margin-bottom: 12px;
+    }
+    label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #57534e;
+      margin-bottom: 4px;
+    }
+    input, textarea {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #e7e5e4;
+      border-radius: 8px;
+      background: #ffffff;
+      font-size: 13px;
+      color: #1c1917;
+      outline: none;
+      font-family: inherit;
+    }
+    input:focus, textarea:focus {
+      border-color: #834832;
+      box-shadow: 0 0 0 2px rgba(131, 72, 50, 0.15);
+    }
+    .term-input {
+      font-family: Georgia, serif;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    button.submit-btn {
+      width: 100%;
+      padding: 10px;
+      background: #834832;
+      color: #ffffff;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: background 0.15s;
+    }
+    button.submit-btn:hover { background: #693522; }
+    button.submit-btn:disabled { background: #d2bab0; cursor: not-allowed; }
+    #result-box {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      display: none;
+    }
+    #result-box.success {
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      color: #166534;
+    }
+    #result-box.error {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: #991b1b;
+    }
+    .footer-actions {
+      margin-top: 14px;
+      padding-top: 10px;
+      border-top: 1px solid #e7e5e4;
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+    }
+    .footer-actions a {
+      color: #834832;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .footer-actions a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="badge-icon">L</div>
+      <h1>LEXIS</h1>
+    </div>
+    <div class="header-links">
+      <a href="#" id="open-options">⚙ Settings</a>
+    </div>
+  </header>
+
+  <form id="capture-form">
+    <div class="field">
+      <label for="term">Target Word *</label>
+      <input type="text" id="term" class="term-input" placeholder="e.g. perspicacious" required autofocus autocomplete="off" />
+    </div>
+
+    <div class="field">
+      <label for="context">Context Sentence (Optional)</label>
+      <textarea id="context" rows="2" placeholder="Sentence from your reading..."></textarea>
+    </div>
+
+    <div class="field">
+      <label for="source">Source / Author (Optional)</label>
+      <input type="text" id="source" placeholder="e.g. Adorno, Negative Dialectics" />
+    </div>
+
+    <button type="submit" id="submit-btn" class="submit-btn">
+      <span>Capture to Personal Lexicon</span>
+    </button>
+  </form>
+
+  <div id="result-box"></div>
+
+  <div class="footer-actions">
+    <a href="#" id="open-review">Open Review Queue →</a>
+    <a href="#" id="open-lexicon">Open Lexicon Catalog →</a>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

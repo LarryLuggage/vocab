@@ -10,6 +10,7 @@ import {
 import { createInitialSrsCard, scheduleCardWithRating } from '@/lib/fsrs';
 import { RecordLogItem } from 'ts-fsrs';
 import { createSampleCards, DEFAULT_USER_ID } from './seed-data';
+export { DEFAULT_USER_ID };
 
 // ============================================================================
 // Supabase Client Initialization

@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lexis Engine — Extension Settings</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #fbf9f5;
+      color: #1c1917;
+      padding: 40px 20px;
+      display: flex;
+      justify-content: center;
+    }
+    .container {
+      max-width: 520px;
+      width: 100%;
+      background: #ffffff;
+      border: 1px solid #e7e5e4;
+      border-radius: 16px;
+      padding: 32px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+    }
+    header {
+      border-bottom: 1px solid #e7e5e4;
+      padding-bottom: 16px;
+      margin-bottom: 24px;
+    }
+    h1 {
+      font-family: Georgia, serif;
+      font-size: 22px;
+      font-weight: 700;
+      color: #1c1917;
+      margin-bottom: 6px;
+    }
+    p.subtitle {
+      font-size: 13px;
+      color: #78716c;
+      line-height: 1.5;
+    }
+    .field {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #57534e;
+      margin-bottom: 6px;
+    }
+    .field-hint {
+      font-size: 11px;
+      color: #a8a29e;
+      margin-top: 4px;
+      line-height: 1.4;
+    }
+    input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #e7e5e4;
+      border-radius: 8px;
+      background: #fdf8f6;
+      font-size: 14px;
+      color: #1c1917;
+      outline: none;
+      font-family: monospace;
+    }
+    input:focus {
+      border-color: #834832;
+      box-shadow: 0 0 0 3px rgba(131, 72, 50, 0.15);
+    }
+    .btn-row {
+      display: flex;
+      gap: 12px;
+      margin-top: 28px;
+    }
+    button {
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    button.primary {
+      background: #834832;
+      color: #ffffff;
+      border: none;
+      flex: 1;
+    }
+    button.primary:hover { background: #693522; }
+    button.secondary {
+      background: #fdf8f6;
+      color: #57534e;
+      border: 1px solid #e7e5e4;
+    }
+    button.secondary:hover { background: #eaddd7; }
+    #status-msg {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      display: none;
+      line-height: 1.4;
+    }
+    #status-msg.success {
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      color: #166534;
+    }
+    #status-msg.error {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: #991b1b;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Lexis Extension Settings</h1>
+      <p class="subtitle">
+        Connect your desktop browser extension directly to your personal Lexis Engine deployment on Vercel.
+      </p>
+    </header>
+
+    <form id="settings-form">
+      <div class="field">
+        <label for="api-url">Lexis App URL</label>
+        <input type="url" id="api-url" placeholder="https://your-app.vercel.app" required />
+        <p class="field-hint">
+          Enter your live Vercel deployment URL or local URL (e.g. <code>http://localhost:3000</code>).
+        </p>
+      </div>
+
+      <div class="field">
+        <label for="api-token">Personal Ingestion Secret Token (LEXIS_SECRET_TOKEN)</label>
+        <input type="password" id="api-token" placeholder="lexis-personal-secret-2026" required />
+        <p class="field-hint">
+          Must match the <code>LEXIS_SECRET_TOKEN</code> configured in your environment variables.
+        </p>
+      </div>
+
+      <div class="btn-row">
+        <button type="button" id="test-btn" class="secondary">Test Connection</button>
+        <button type="submit" id="save-btn" class="primary">Save Settings</button>
+      </div>
+    </form>
+
+    <div id="status-msg"></div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
