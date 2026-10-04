@@ -2,7 +2,7 @@
 
 ## Product Name: Lexis Engine — Personal Vocabulary Operating System
 - **Document Status**: Active / Single-User Personal OS
-- **Target Platform**: Web (Desktop & Mobile PWA), Chrome Extension (Manifest V3), iOS Shortcuts
+- **Target Platform**: Web (Desktop & Mobile PWA), Chrome Extension (Manifest V3), Google Pixel 10 (Android W3C Web Share Target), Zotero (Desktop Script & Mobile Share)
 - **Primary Tech Stack**: Next.js 15 (App Router), TypeScript, Tailwind CSS, Supabase (PostgreSQL), Gemini / OpenAI Structured JSON, ts-fsrs
 
 ---
@@ -47,6 +47,8 @@ A streamlined, private, zero-friction vocabulary operating system designed exclu
 | **ING-04** | Deduplication & Variant Handling | Checks if the base root or lemma already exists in the database. If present, prompts or automatically appends the new context sentence. | P0 |
 | **ING-05** | Chrome Browser Extension | Manifest V3 extension with context-menu capture, automatic sentence boundary detection, and status badge. | P0 |
 | **ING-06** | iOS Shortcut Webhook | Native iOS Share Sheet integration capturing selected text directly to Lexis. | P1 |
+| **ING-07** | Google Pixel 10 Web Share Target | W3C Web Share Target API in `manifest.json` enabling Android system Share sheet capture directly into Lexis. | P0 |
+| **ING-08** | Zotero Citation Parser & Script | Auto-extraction of author, title, page numbers from Zotero copies; 1-click desktop integration script. | P0 |
 
 ### 3.2 Spaced Repetition System (SRS)
 | Feature ID | Feature Name | Description | Priority |
@@ -132,16 +134,23 @@ CREATE INDEX IF NOT EXISTS idx_vocab_term ON vocab_cards (term);
   - Three active practice modalities (`ACT-01`, `ACT-02`, `ACT-03`).
   - Personal Lexicon catalog & morphological grouping.
 
-- **Phase 2: Everywhere Capture & Personal Integration (Current Milestone)**:
-  - Private token ingestion API (`/api/ingest`) with secret token verification.
-  - Reading source and author tracking in card metadata.
-  - Dedicated Manifest V3 Chrome Extension:
+- **Phase 2: Everywhere Capture & Scholarly Integration (Complete)**:
+  - Private token ingestion API (`/api/ingest`) with secret token verification and auto-deduplication.
+  - Reading source, author, and page tracking in card metadata.
+  - Manifest V3 Chrome Extension (`extension/`):
     - Context menu capture with auto-sentence extraction.
-    - Keyboard shortcut capture.
-    - Extension popup for instant lookup, capture status, and settings.
-  - Native iOS Shortcut recipe for mobile reading capture.
+    - Keyboard shortcut capture (`Alt+L` / `Command+Shift+L`).
+    - Extension popup for instant lookup and direct capture.
+    - Options page for remote Vercel URL and bearer token configuration.
+  - Google Pixel 10 (Android) Integration:
+    - W3C Web Share Target API registered in `manifest.json`.
+    - Android native system share sheet captures highlights directly from Zotero Android, Chrome, and Kindle.
+  - Zotero Academic Reader Integration:
+    - Academic citation parser (`lib/zotero-parser.ts`) extracting author, title, and page numbers from academic annotations.
+    - Native Zotero 7 desktop action script (`@docs/zotero-setup.md`) for 1-click bibliographic capture.
 
-- **Phase 3: Knowledge Graph & Second-Brain Sync**:
-  - Interactive Morpheme Root Network visualizer.
-  - Obsidian & Markdown bulk export / sync with YAML frontmatter.
+- **Phase 3: Knowledge Graph & Second-Brain Sync (Upcoming)**:
+  - Interactive Morpheme Root Network visualizer on `/lexicon` (interactive SVG/canvas cluster graph linking words sharing Greek/Latin roots).
+  - Obsidian & Markdown bulk export / sync endpoint (`/api/export?format=markdown`) with YAML frontmatter for personal knowledge bases and NotebookLM.
+  - Morpheme-based practice filter (focus review drills on specific etymological clusters).
   - Offline PWA caching with Service Worker.
