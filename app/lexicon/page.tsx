@@ -35,6 +35,22 @@ export default function LexiconPage() {
     const loaded = getClientCards();
     setCards(loaded);
 
+    // Sync with server / Supabase API in background
+    fetch('/api/cards')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((payload) => {
+        if (payload?.success && Array.isArray(payload.data) && payload.data.length > 0) {
+          // Merge server cards with local cards
+          const existingMap = new Map(loaded.map((c) => [c.id, c]));
+          for (const serverCard of payload.data) {
+            existingMap.set(serverCard.id, serverCard);
+          }
+          const merged = Array.from(existingMap.values());
+          setCards(merged);
+        }
+      })
+      .catch(() => {});
+
     const handleUpdate = () => {
       setCards(getClientCards());
     };

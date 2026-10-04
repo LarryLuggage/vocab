@@ -158,6 +158,17 @@ export default function QuickCapturePage() {
     addOrUpdateClientCard(updatedCard);
     window.dispatchEvent(new Event('lexis-cards-updated'));
 
+    // Attempt background persistence to Supabase API
+    try {
+      fetch(`/api/cards/${duplicateMatch.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sentence: cleanSentence }),
+      }).catch(() => {});
+    } catch {
+      // offline safe
+    }
+
     setSuccessMessage(
       `Context sentence successfully appended to existing entry "${duplicateMatch.term}".`
     );
@@ -179,6 +190,20 @@ export default function QuickCapturePage() {
 
     addOrUpdateClientCard(cardWithSrs);
     window.dispatchEvent(new Event('lexis-cards-updated'));
+
+    // Attempt background persistence to Supabase API
+    try {
+      fetch('/api/cards', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          card: previewCard,
+          srs: initialSrs,
+        }),
+      }).catch(() => {});
+    } catch {
+      // offline safe
+    }
 
     setSuccessMessage(`"${previewCard.term}" successfully saved to your personal Lexicon!`);
     setPreviewCard(null);

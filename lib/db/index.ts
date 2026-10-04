@@ -14,14 +14,22 @@ import { createSampleCards, DEFAULT_USER_ID } from './seed-data';
 // ============================================================================
 // Supabase Client Initialization
 // ============================================================================
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
 const supabaseKey =
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.SUPABASE_ANON_KEY ||
+  process.env.SUPABASE_SECRET_KEY;
 
 function isLiveSupabaseConfigured(): boolean {
   if (!supabaseUrl || !supabaseKey) return false;
   if (supabaseUrl.includes('your-project.supabase.co')) return false;
-  if (supabaseKey === 'your-anon-key' || supabaseKey === 'your-service-role-key') return false;
+  if (
+    supabaseKey === 'your-anon-key' ||
+    supabaseKey === 'your-service-role-key'
+  )
+    return false;
   return true;
 }
 

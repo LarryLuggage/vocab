@@ -284,8 +284,8 @@ async function fetchGeminiEnrichment(
   contextSentence?: string,
   source?: string
 ): Promise<LexicalEnrichmentPayload | null> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey === 'your-gemini-api-key') return null;
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+  if (!apiKey || apiKey === 'your-gemini-api-key' || apiKey === 'your-google-api-key') return null;
 
   const prompt = `You are a world-class lexicographer and etymologist. Analyze the target vocabulary word "${term}".
 ${contextSentence ? `Context sentence provided by user: "${contextSentence}"` : ''}
@@ -327,10 +327,11 @@ Respond with ONLY raw JSON.`;
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3500);
+    const timeout = setTimeout(() => controller.abort(), 4000);
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-    const response = await fetch(url, {
+    const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+    let url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    let response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,
@@ -342,6 +343,22 @@ Respond with ONLY raw JSON.`;
         },
       }),
     });
+
+    if (response.status === 404 && model !== 'gemini-1.5-flash') {
+      url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseMimeType: 'application/json',
+            temperature: 0.2,
+          },
+        }),
+      });
+    }
     clearTimeout(timeout);
 
     if (!response.ok) {
