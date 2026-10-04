@@ -22,7 +22,7 @@ export async function GET() {
       GEMINI_KEY: Boolean(rawGeminiKeyEnv),
       GOOGLE_AI_KEY: Boolean(rawGoogleAiKey),
     },
-    configuredModel: process.env.GEMINI_MODEL || 'gemini-2.0-flash (default)',
+    configuredModel: process.env.GEMINI_MODEL || 'gemini-3.8-flash (default)',
     supabaseConfigured: Boolean(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL),
     vercelEnvironment: process.env.VERCEL_ENV || 'local / not set',
     nodeEnv: process.env.NODE_ENV || 'development',
@@ -34,10 +34,27 @@ export async function GET() {
   };
 
   if (geminiKey) {
+    let availableFromGoogle: string[] = [];
+    try {
+      const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${geminiKey}`);
+      if (listRes.ok) {
+        const listData = await listRes.json();
+        if (Array.isArray(listData.models)) {
+          availableFromGoogle = listData.models
+            .filter((m: any) => m.supportedGenerationMethods?.includes('generateContent'))
+            .map((m: any) => m.name.replace(/^models\//, ''));
+        }
+      }
+    } catch {
+      // ignore
+    }
+
     const candidateModels = [
       process.env.GEMINI_MODEL,
+      'gemini-3.8-flash',
+      'gemini-2.5-flash',
+      ...availableFromGoogle.slice(0, 3),
       'gemini-2.0-flash',
-      'gemini-1.5-flash',
     ].filter(Boolean) as string[];
     const uniqueModels = Array.from(new Set(candidateModels));
 
@@ -88,6 +105,7 @@ export async function GET() {
     geminiProbeResult = {
       tested: true,
       overallSuccess: anySuccess,
+      availableModelsFromGoogle: availableFromGoogle,
       models: modelTests,
     };
   }
