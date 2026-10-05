@@ -1,7 +1,7 @@
 // Lexis Engine — Options Page Script
 
 const DEFAULT_API_URL = 'http://localhost:3000';
-const DEFAULT_API_TOKEN = 'lexis-personal-secret-2026';
+const DEFAULT_API_TOKEN = ''; // Set your LEXIS_SECRET_TOKEN in the extension options
 
 document.addEventListener('DOMContentLoaded', async () => {
   const form = document.getElementById('settings-form');

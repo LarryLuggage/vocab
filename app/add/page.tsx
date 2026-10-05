@@ -17,12 +17,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { VocabCard, CardWithSrs } from '@/types/lexis';
-import { createInitialSrsCard } from '@/lib/fsrs';
-import {
-  getClientCards,
-  addOrUpdateClientCard,
-} from '@/lib/sample-data';
-import { enrichWordClientFallback } from '@/lib/enrichment-fallback';
+import { apiFetch, ApiError, errorMessageOf, notifyCardsUpdated } from '@/lib/api-client';
 import { parseShareTargetPayload } from '@/lib/share-parser';
 import { cn } from '@/lib/utils';
 
@@ -48,14 +43,34 @@ export default function QuickCapturePage() {
   const [duplicateMatch, setDuplicateMatch] = useState<CardWithSrs | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Existing lexicon, for the live duplicate check
+  const [existingCards, setExistingCards] = useState<CardWithSrs[]>([]);
+
+  useEffect(() => {
+    apiFetch<{ data: CardWithSrs[] }>('/api/cards')
+      .then((payload) => setExistingCards(payload.data))
+      .catch((err) => setErrorMessage(`Could not load your lexicon: ${errorMessageOf(err, 'unknown error')}`));
+  }, []);
 
   // Live duplicate check as user types
   const checkDuplicate = (query: string): CardWithSrs | null => {
     const trimmed = query.trim().toLowerCase();
     if (!trimmed) return null;
-    const cards = getClientCards();
-    return cards.find((c) => c.term.toLowerCase() === trimmed) || null;
+    return existingCards.find((c) => c.term.toLowerCase() === trimmed) || null;
   };
+
+  // Re-check once the lexicon arrives (e.g. a term pre-filled by the share target)
+  useEffect(() => {
+    if (existingCards.length > 0 && term.trim()) {
+      setDuplicateMatch(checkDuplicate(term));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existingCards]);
+
+  const sourceCitation = () =>
+    [source.trim(), author.trim(), page.trim()].filter(Boolean).join(' • ') || undefined;
 
   // Autofocus word input on mount & detect Android Web Share Target params
   useEffect(() => {
@@ -133,62 +148,46 @@ export default function QuickCapturePage() {
     const startTime = performance.now();
 
     try {
-      let enriched: VocabCard | null = null;
+      const json = await apiFetch<{ card?: any; data?: any }>('/api/enrich', {
+        method: 'POST',
+        body: JSON.stringify({
+          term: cleanTerm,
+          contextSentence: contextSentence.trim() || undefined,
+          source: source.trim() || undefined,
+          author: author.trim() || undefined,
+          page: page.trim() || undefined,
+        }),
+      });
 
-      // Try calling server endpoint /api/enrich
-      try {
-        const res = await fetch('/api/enrich', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            term: cleanTerm,
-            contextSentence: contextSentence.trim() || undefined,
-            source: source.trim() || undefined,
-            author: author.trim() || undefined,
-            page: page.trim() || undefined,
-          }),
-        });
-
-        if (res.ok) {
-          const json = await res.json();
-          const raw = json.card || json.data || (json.term ? json : null);
-          if (raw && (raw.term || raw.primary_definition)) {
-            enriched = {
-              id: raw.id || `card-${(raw.term || cleanTerm).toLowerCase()}-${Date.now()}`,
-              user_id: raw.user_id || 'default-user',
-              created_at: raw.created_at || new Date().toISOString(),
-              term: raw.term || cleanTerm,
-              part_of_speech: raw.part_of_speech || 'noun',
-              phonetic: raw.phonetic || null,
-              primary_definition: raw.primary_definition || '',
-              nuance_note: raw.nuance_note || null,
-              etymology: raw.etymology || { roots: [], cognates: [] },
-              collocations: raw.collocations || [],
-              source_context: {
-                sentence: contextSentence.trim() || raw.source_context?.sentence || null,
-                source: source.trim() || raw.source_context?.source || null,
-                author: author.trim() || raw.source_context?.author || null,
-                page: page.trim() || raw.source_context?.page || null,
-                url: null,
-              },
-              cloze_sentences: raw.cloze_sentences || [],
-              distinction_matrix: raw.distinction_matrix || null,
-              is_fallback: Boolean(raw.is_fallback),
-              enrichment_source: raw.enrichment_source || (raw.is_fallback ? 'dictionary' : 'gemini'),
-              fallback_reason: raw.fallback_reason || null,
-            };
-          }
-        }
-      } catch {
-        // Network / server not available - fallback gracefully
+      const raw = json.card || json.data;
+      if (!raw || !raw.primary_definition) {
+        throw new Error('Enrichment returned an incomplete entry.');
       }
 
-      // If backend was not reached or returned incomplete data, use smart client fallback
-      if (!enriched || !enriched.primary_definition) {
-        // Add small realistic delay to showcase the smooth latency gauge
-        await new Promise((r) => setTimeout(r, 650));
-        enriched = await enrichWordClientFallback(cleanTerm, contextSentence.trim());
-      }
+      const enriched: VocabCard = {
+        id: raw.id,
+        user_id: raw.user_id,
+        created_at: raw.created_at || new Date().toISOString(),
+        term: raw.term || cleanTerm,
+        part_of_speech: raw.part_of_speech || 'noun',
+        phonetic: raw.phonetic || null,
+        primary_definition: raw.primary_definition,
+        nuance_note: raw.nuance_note || null,
+        etymology: raw.etymology || { roots: [], cognates: [] },
+        collocations: raw.collocations || [],
+        source_context: {
+          sentence: contextSentence.trim() || raw.source_context?.sentence || null,
+          source: sourceCitation() || raw.source_context?.source || null,
+          author: author.trim() || raw.source_context?.author || null,
+          page: page.trim() || raw.source_context?.page || null,
+          url: null,
+        },
+        cloze_sentences: raw.cloze_sentences || [],
+        distinction_matrix: raw.distinction_matrix || null,
+        is_fallback: Boolean(raw.is_fallback),
+        enrichment_source: raw.enrichment_source,
+        fallback_reason: raw.fallback_reason || undefined,
+      };
 
       const latency = Math.round(performance.now() - startTime);
       setFinalLatency(latency);
@@ -202,7 +201,7 @@ export default function QuickCapturePage() {
   };
 
   // Handle ING-04: Append context sentence to existing card
-  const handleAppendContext = () => {
+  const handleAppendContext = async () => {
     if (!duplicateMatch) return;
     const cleanSentence = contextSentence.trim();
     if (!cleanSentence) {
@@ -210,75 +209,60 @@ export default function QuickCapturePage() {
       return;
     }
 
-    const updatedCard: CardWithSrs = {
-      ...duplicateMatch,
-      cloze_sentences: [
-        ...duplicateMatch.cloze_sentences,
-        cleanSentence.replace(new RegExp(`\\b${duplicateMatch.term}\\b`, 'gi'), `{{${duplicateMatch.term}}}`),
-      ],
-      source_context: {
-        sentence: cleanSentence,
-        source: duplicateMatch.source_context?.source || 'Appended Reader Context',
-      },
-    };
-
-    addOrUpdateClientCard(updatedCard);
-    window.dispatchEvent(new Event('lexis-cards-updated'));
-
-    // Attempt background persistence to Supabase API
+    setIsSaving(true);
+    setErrorMessage(null);
     try {
-      fetch(`/api/cards/${duplicateMatch.id}`, {
+      await apiFetch(`/api/cards/${duplicateMatch.id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sentence: cleanSentence }),
-      }).catch(() => {});
-    } catch {
-      // offline safe
+        body: JSON.stringify({ sentence: cleanSentence, source: sourceCitation() }),
+      });
+      notifyCardsUpdated();
+      setSuccessMessage(
+        `Context sentence successfully appended to existing entry "${duplicateMatch.term}".`
+      );
+      setDuplicateMatch(null);
+      setTerm('');
+      setContextSentence('');
+      setPreviewCard(null);
+    } catch (err) {
+      setErrorMessage(`Could not append context: ${errorMessageOf(err, 'unknown error')}`);
+    } finally {
+      setIsSaving(false);
     }
-
-    setSuccessMessage(
-      `Context sentence successfully appended to existing entry "${duplicateMatch.term}".`
-    );
-    setDuplicateMatch(null);
-    setTerm('');
-    setContextSentence('');
-    setPreviewCard(null);
   };
 
-  // Save new card to lexicon
-  const handleSaveToLexicon = (startReviewNow: boolean = false) => {
+  // Save new card to lexicon. `force` saves even when the server reports a lemma variant.
+  const handleSaveToLexicon = async (startReviewNow: boolean = false, force: boolean = false) => {
     if (!previewCard) return;
 
-    const initialSrs = createInitialSrsCard(previewCard.id, previewCard.user_id);
-    const cardWithSrs: CardWithSrs = {
-      ...previewCard,
-      srs: initialSrs,
-    };
-
-    addOrUpdateClientCard(cardWithSrs);
-    window.dispatchEvent(new Event('lexis-cards-updated'));
-
-    // Attempt background persistence to Supabase API
+    setIsSaving(true);
+    setErrorMessage(null);
     try {
-      fetch('/api/cards', {
+      const { id: _id, user_id: _user, created_at: _created, ...content } = previewCard;
+      const res = await apiFetch<{ data: CardWithSrs }>('/api/cards', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          card: previewCard,
-          srs: initialSrs,
-        }),
-      }).catch(() => {});
-    } catch {
-      // offline safe
-    }
+        body: JSON.stringify({ ...content, force }),
+      });
 
-    setSuccessMessage(`"${previewCard.term}" successfully saved to your personal Lexicon!`);
-    setPreviewCard(null);
-    setTerm('');
-    setContextSentence('');
+      setExistingCards((prev) => [res.data, ...prev]);
+      notifyCardsUpdated();
+      setSuccessMessage(`"${res.data.term}" successfully saved to your personal Lexicon!`);
+      setDuplicateMatch(null);
+      setPreviewCard(null);
+      setTerm('');
+      setContextSentence('');
 
-    if (startReviewNow) {
-      router.push('/review');
+      if (startReviewNow) {
+        router.push('/review');
+      }
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && err.body?.existingCard) {
+        setDuplicateMatch(err.body.existingCard);
+      } else {
+        setErrorMessage(`Could not save: ${errorMessageOf(err, 'unknown error')}`);
+      }
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -466,7 +450,7 @@ export default function QuickCapturePage() {
             <button
               type="button"
               onClick={handleAppendContext}
-              disabled={!contextSentence.trim()}
+              disabled={!contextSentence.trim() || isSaving}
               className={cn(
                 'px-4 py-2 rounded-lg text-xs font-sans font-semibold transition-all flex items-center gap-1.5 shadow-sm',
                 contextSentence.trim()
@@ -477,6 +461,17 @@ export default function QuickCapturePage() {
               <PlusCircle className="w-3.5 h-3.5" />
               <span>Append Context Sentence</span>
             </button>
+            {previewCard &&
+              previewCard.term.toLowerCase() !== duplicateMatch.term.toLowerCase() && (
+                <button
+                  type="button"
+                  onClick={() => handleSaveToLexicon(false, true)}
+                  disabled={isSaving}
+                  className="px-4 py-2 rounded-lg text-xs font-sans font-semibold border border-amber-300 text-amber-900 hover:bg-amber-100 transition-all"
+                >
+                  Save &ldquo;{previewCard.term}&rdquo; as a separate word
+                </button>
+              )}
             <span className="text-[11px] font-sans text-amber-700">
               {!contextSentence.trim() && '(Type a context sentence above to append)'}
             </span>
@@ -677,6 +672,7 @@ export default function QuickCapturePage() {
             <button
               type="button"
               onClick={() => handleSaveToLexicon(false)}
+              disabled={isSaving}
               className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-[#834832] hover:bg-[#693522] text-white text-xs font-sans font-semibold transition-all shadow-sm shadow-[#834832]/20"
             >
               Save to Personal Lexicon
@@ -684,6 +680,7 @@ export default function QuickCapturePage() {
             <button
               type="button"
               onClick={() => handleSaveToLexicon(true)}
+              disabled={isSaving}
               className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-[#36160b] hover:bg-[#1c1917] text-white text-xs font-sans font-semibold transition-all flex items-center justify-center gap-2 shadow-sm"
             >
               <span>Save & Review Now</span>

@@ -22,6 +22,7 @@ import {
   RotateCcw,
   Eye,
   EyeOff,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   CardWithSrs,
@@ -30,13 +31,8 @@ import {
   ProductionValidationResult,
   DistinctionMatrixItem,
 } from '@/types/lexis';
+import { apiFetch, errorMessageOf, notifyCardsUpdated } from '@/lib/api-client';
 import {
-  getClientCards,
-  getDueCards,
-  updateClientCardSrs,
-} from '@/lib/sample-data';
-import {
-  scheduleCardWithRating,
   getSchedulePreviews,
   getCardStateLabel,
 } from '@/lib/fsrs';
@@ -156,11 +152,14 @@ function CardFullDetails({
 }
 
 export default function ReviewPage() {
-  const [cards, setCards] = useState<CardWithSrs[]>([]);
   const [queue, setQueue] = useState<CardWithSrs[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [drillAll, setDrillAll] = useState(false);
   const [sessionCompleted, setSessionCompleted] = useState(false);
+  const [isLoadingQueue, setIsLoadingQueue] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isSavingRating, setIsSavingRating] = useState(false);
+  const [ratingError, setRatingError] = useState<string | null>(null);
 
   // Session Statistics
   const [reviewedCount, setReviewedCount] = useState(0);
@@ -203,14 +202,20 @@ export default function ReviewPage() {
     }
   }, []);
 
-  // Load cards from local storage / API
-  const refreshQueue = useCallback((includeAll: boolean = false) => {
-    const all = getClientCards();
-    setCards(all);
-    const due = includeAll ? all : getDueCards(all);
-    setQueue(due);
-    setCurrentIndex(0);
-    setSessionCompleted(due.length === 0);
+  // Load the due queue (or every card, for drill-all) from the server
+  const refreshQueue = useCallback(async (includeAll: boolean = false) => {
+    setIsLoadingQueue(true);
+    setLoadError(null);
+    try {
+      const res = await apiFetch<{ data: CardWithSrs[] }>(includeAll ? '/api/cards' : '/api/review');
+      setQueue(res.data);
+      setCurrentIndex(0);
+      setSessionCompleted(res.data.length === 0);
+    } catch (err) {
+      setLoadError(errorMessageOf(err, 'Failed to load the review queue.'));
+    } finally {
+      setIsLoadingQueue(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -336,7 +341,8 @@ export default function ReviewPage() {
     try {
       const result = await validateProductionSentence(
         currentCard.term,
-        productionSentence
+        productionSentence,
+        currentCard.id
       );
       setProductionResult(result);
       setIsAnswerRevealed(true);
@@ -358,31 +364,26 @@ export default function ReviewPage() {
     }
   };
 
-  // Handle FSRS Rating submission
+  // Handle FSRS Rating submission — the server schedules and persists; we only
+  // advance once the rating is saved, so a failed save is never silently lost.
   const handleRateCard = async (rating: FSRSRating) => {
-    if (!currentCard) return;
+    if (!currentCard || isSavingRating) return;
 
-    const { updatedSrs } = scheduleCardWithRating(currentCard.srs, rating);
-
-    // Save locally
-    updateClientCardSrs(currentCard.id, updatedSrs);
-    window.dispatchEvent(new Event('lexis-cards-updated'));
-
-    // Attempt to persist to /api/review in background
+    setIsSavingRating(true);
+    setRatingError(null);
     try {
-      fetch('/api/review', {
+      await apiFetch('/api/review', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cardId: currentCard.id,
-          rating,
-          updatedSrs,
-        }),
-      }).catch(() => {});
-    } catch {
-      // offline / mock safe
+        body: JSON.stringify({ cardId: currentCard.id, rating }),
+      });
+    } catch (err) {
+      setRatingError(`Rating not saved: ${errorMessageOf(err, 'unknown error')}. Try again.`);
+      return;
+    } finally {
+      setIsSavingRating(false);
     }
 
+    notifyCardsUpdated();
     setReviewedCount((prev) => prev + 1);
 
     // Move to next card or complete session
@@ -419,10 +420,36 @@ export default function ReviewPage() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleRevealAnswer, currentIndex, queue, currentCard]);
+  }, [handleRevealAnswer, currentIndex, queue, currentCard, isSavingRating]);
 
   // Progress percentage
   const progressPercent = queue.length > 0 ? Math.round((currentIndex / queue.length) * 100) : 100;
+
+  if (isLoadingQueue) {
+    return (
+      <p className="max-w-2xl mx-auto py-16 text-center text-sm font-sans text-[#a8a29e]">
+        Loading your review queue…
+      </p>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="max-w-2xl mx-auto py-16 px-4 space-y-4 text-center">
+        <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex items-center gap-3 text-rose-800 text-left">
+          <AlertTriangle className="w-5 h-5 text-rose-600 flex-shrink-0" />
+          <span className="text-sm font-sans">Could not load your review queue: {loadError}</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => refreshQueue(drillAll)}
+          className="px-5 py-2.5 rounded-xl bg-[#834832] hover:bg-[#693522] text-white text-xs font-sans font-semibold"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   // Session Completed Screen
   if (sessionCompleted || !currentCard) {
@@ -991,6 +1018,13 @@ export default function ReviewPage() {
           </span>
         </div>
 
+        {ratingError && (
+          <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-center gap-2.5 text-rose-900 text-xs font-sans">
+            <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+            <span>{ratingError}</span>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
           {schedulePreviews.map((preview) => {
             let buttonStyle = 'border-stone-200 hover:border-stone-400 bg-stone-50';
@@ -1024,6 +1058,7 @@ export default function ReviewPage() {
                 key={preview.rating}
                 type="button"
                 onClick={() => handleRateCard(preview.rating)}
+                disabled={isSavingRating}
                 className={cn(
                   'p-3 sm:p-3.5 rounded-xl border text-center transition-all flex flex-col items-center justify-between gap-1 shadow-sm active:scale-98',
                   buttonStyle

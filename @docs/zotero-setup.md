@@ -48,7 +48,7 @@ In Zotero 7, you can create a direct hotkey to push your highlighted selection d
 // Lexis Engine — Zotero 7 Ingest Action
 (async () => {
   const LEXIS_URL = 'https://your-lexis-deployment.vercel.app'; // Replace with your live Vercel URL
-  const LEXIS_SECRET_TOKEN = 'lexis-personal-secret-2026';     // Replace with your secret token
+  const LEXIS_SECRET_TOKEN = 'paste-your-LEXIS_SECRET_TOKEN-here'; // Same value as the server env var
 
   const reader = Zotero.Reader.getByTabID(Zotero_Tabs.selectedID);
   if (!reader) {

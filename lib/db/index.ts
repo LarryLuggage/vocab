@@ -15,13 +15,13 @@ export { DEFAULT_USER_ID };
 // ============================================================================
 // Supabase Client Initialization
 // ============================================================================
+// Server-side only: the app authenticates users itself (lib/auth.ts), so it
+// talks to Postgres with the service-role key. The anon key is never used —
+// RLS has no policies, which locks anon access out entirely.
 const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
 const supabaseKey =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  process.env.SUPABASE_ANON_KEY ||
-  process.env.SUPABASE_SECRET_KEY;
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
 
 function isLiveSupabaseConfigured(): boolean {
   if (!supabaseUrl || !supabaseKey) return false;
@@ -108,8 +108,37 @@ function getCommonPrefixLength(a: string, b: string): number {
   return i;
 }
 
+// Appending a sighting keeps the card's existing author/page/url metadata and,
+// when the sentence contains the term, adds it as a new cloze drill.
+export function buildAppendedContext(
+  card: VocabCard,
+  sentence: string,
+  source?: string
+): Pick<VocabCard, 'source_context' | 'cloze_sentences'> {
+  const existingSentence = card.source_context?.sentence;
+  const cloze_sentences = [...(card.cloze_sentences || [])];
+
+  const termPattern = new RegExp(
+    `\\b${card.term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[a-z]*\\b`,
+    'i'
+  );
+  if (termPattern.test(sentence)) {
+    const masked = sentence.replace(termPattern, (match) => `{{c1::${match}}}`);
+    if (!cloze_sentences.includes(masked)) cloze_sentences.push(masked);
+  }
+
+  return {
+    source_context: {
+      ...card.source_context,
+      sentence: existingSentence ? `${existingSentence}\n\n${sentence}` : sentence,
+      source: source || card.source_context?.source || null,
+    },
+    cloze_sentences,
+  };
+}
+
 // ============================================================================
-// In-Memory Persistent Fallback Store
+// In-Memory Store (local development & tests only)
 // ============================================================================
 class LocalVocabStore {
   private cards: Map<string, VocabCard> = new Map();
@@ -256,16 +285,9 @@ class LocalVocabStore {
     const card = this.cards.get(id);
     if (!card) return null;
 
-    const existingSentence = card.source_context?.sentence;
-    const newSentence = existingSentence ? `${existingSentence}\n\n${sentence}` : sentence;
-    const newSource = source || card.source_context?.source || null;
-
     const updated: VocabCard = {
       ...card,
-      source_context: {
-        sentence: newSentence,
-        source: newSource,
-      },
+      ...buildAppendedContext(card, sentence, source),
     };
 
     this.cards.set(id, updated);
@@ -331,15 +353,64 @@ class LocalVocabStore {
   }
 }
 
-// Global in-memory singleton
-const globalStore = new LocalVocabStore();
+// ============================================================================
+// Store Selection
+// ----------------------------------------------------------------------------
+// With Supabase configured, every query error throws (routes turn it into a
+// 500 the UI shows). Without Supabase, the in-memory store serves local dev
+// and tests — but never production, where each write would vanish on the next
+// serverless cold start while the API reported success.
+// ============================================================================
+export class DbError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DbError';
+  }
+}
+
+// Kept on globalThis so `next dev` module reloads don't wipe it mid-session
+const globalForStore = globalThis as unknown as { __lexisMemoryStore?: LocalVocabStore };
+
+function memoryStore(): LocalVocabStore {
+  if (process.env.NODE_ENV === 'production' && process.env.LEXIS_ALLOW_MEMORY_STORE !== 'true') {
+    const hint = supabaseUrl && !supabaseKey
+      ? 'NEXT_PUBLIC_SUPABASE_URL is set but SUPABASE_SERVICE_ROLE_KEY is missing.'
+      : 'Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.';
+    throw new DbError(
+      `Database not configured: ${hint} Refusing to use the in-memory store in production because writes would be lost.`
+    );
+  }
+  if (!globalForStore.__lexisMemoryStore) {
+    globalForStore.__lexisMemoryStore = new LocalVocabStore();
+  }
+  return globalForStore.__lexisMemoryStore;
+}
 
 export function resetDbStore(): void {
-  globalStore.reset();
+  memoryStore().reset();
+}
+
+function check(error: { message: string } | null, operation: string): void {
+  if (error) {
+    throw new DbError(`Database ${operation} failed: ${error.message}`);
+  }
+}
+
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (m) => `\\${m}`);
+}
+
+function withSrs(item: any, userId: string): CardWithSrs {
+  const { srs: rawSrs, ...vocab } = item;
+  const srs = Array.isArray(rawSrs) ? rawSrs[0] : rawSrs;
+  return {
+    ...vocab,
+    srs: srs || createInitialSrsCard(item.id, item.user_id || userId),
+  } as CardWithSrs;
 }
 
 // ============================================================================
-// Public Data Layer Methods (Hybrid: Supabase with Local Fallback)
+// Public Data Layer Methods
 // ============================================================================
 
 export async function findCardByTerm(
@@ -347,36 +418,27 @@ export async function findCardByTerm(
   userId: string = DEFAULT_USER_ID
 ): Promise<VocabCard | null> {
   const supabase = getSupabaseClient();
-  if (supabase) {
-    try {
-      const cleanTerm = term.toLowerCase().trim();
-      const { data, error } = await supabase
-        .from('vocab_cards')
-        .select('*')
-        .eq('user_id', userId)
-        .ilike('term', cleanTerm)
-        .maybeSingle();
+  if (!supabase) return memoryStore().findByTerm(term, userId);
 
-      if (!error && data) {
-        return data as VocabCard;
-      }
+  const cleanTerm = term.toLowerCase().trim();
+  const { data: exact, error: exactErr } = await supabase
+    .from('vocab_cards')
+    .select('*')
+    .eq('user_id', userId)
+    .ilike('term', escapeLikePattern(cleanTerm))
+    .limit(1);
+  check(exactErr, 'term lookup');
+  if (exact && exact.length > 0) return exact[0] as VocabCard;
 
-      // If not exact match, query cards for user to check variant lemmas
-      const { data: allUserCards, error: listError } = await supabase
-        .from('vocab_cards')
-        .select('*')
-        .eq('user_id', userId);
+  // No exact match: scan the user's terms for lemma variants
+  const { data: allTerms, error: listErr } = await supabase
+    .from('vocab_cards')
+    .select('*')
+    .eq('user_id', userId);
+  check(listErr, 'variant lookup');
 
-      if (!listError && allUserCards) {
-        const match = allUserCards.find(c => areTermsVariants(term, c.term));
-        if (match) return match as VocabCard;
-      }
-    } catch (err) {
-      console.warn('[Lexis DB] Supabase query failed, falling back to local store:', err);
-    }
-  }
-
-  return globalStore.findByTerm(term, userId);
+  const match = (allTerms || []).find((c) => areTermsVariants(term, c.term));
+  return (match as VocabCard) || null;
 }
 
 export async function listCards(params?: {
@@ -388,44 +450,31 @@ export async function listCards(params?: {
 }): Promise<CardWithSrs[]> {
   const userId = params?.userId || DEFAULT_USER_ID;
   const supabase = getSupabaseClient();
+  if (!supabase) return memoryStore().list(params);
 
-  if (supabase) {
-    try {
-      let query = supabase
-        .from('vocab_cards')
-        .select('*, srs:srs_cards(*)')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false });
+  let query = supabase
+    .from('vocab_cards')
+    .select('*, srs:srs_cards(*)')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
 
-      if (params?.pos) {
-        query = query.ilike('part_of_speech', params.pos);
-      }
-      if (params?.search) {
-        query = query.or(
-          `term.ilike.%${params.search}%,primary_definition.ilike.%${params.search}%,nuance_note.ilike.%${params.search}%`
-        );
-      }
-      if (params?.limit) {
-        const offset = params.offset || 0;
-        query = query.range(offset, offset + params.limit - 1);
-      }
-
-      const { data, error } = await query;
-      if (!error && data) {
-        return data.map((item: any) => {
-          const srs = Array.isArray(item.srs) ? item.srs[0] : item.srs;
-          return {
-            ...item,
-            srs: srs || createInitialSrsCard(item.id, userId),
-          } as CardWithSrs;
-        });
-      }
-    } catch (err) {
-      console.warn('[Lexis DB] Supabase list failed, falling back to local store:', err);
-    }
+  if (params?.pos) {
+    query = query.ilike('part_of_speech', escapeLikePattern(params.pos));
+  }
+  if (params?.search) {
+    const s = escapeLikePattern(params.search).replace(/[,()]/g, ' ');
+    query = query.or(
+      `term.ilike.%${s}%,primary_definition.ilike.%${s}%,nuance_note.ilike.%${s}%`
+    );
+  }
+  if (params?.limit) {
+    const offset = params.offset || 0;
+    query = query.range(offset, offset + params.limit - 1);
   }
 
-  return globalStore.list(params);
+  const { data, error } = await query;
+  check(error, 'card list');
+  return (data || []).map((item: any) => withSrs(item, userId));
 }
 
 export async function getCardById(
@@ -433,27 +482,16 @@ export async function getCardById(
   userId: string = DEFAULT_USER_ID
 ): Promise<CardWithSrs | null> {
   const supabase = getSupabaseClient();
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('vocab_cards')
-        .select('*, srs:srs_cards(*)')
-        .eq('id', id)
-        .maybeSingle();
+  if (!supabase) return memoryStore().getById(id, userId);
 
-      if (!error && data) {
-        const srs = Array.isArray(data.srs) ? data.srs[0] : data.srs;
-        return {
-          ...data,
-          srs: srs || createInitialSrsCard(data.id, data.user_id),
-        } as CardWithSrs;
-      }
-    } catch (err) {
-      console.warn('[Lexis DB] Supabase getCardById failed, falling back:', err);
-    }
-  }
-
-  return globalStore.getById(id, userId);
+  const { data, error } = await supabase
+    .from('vocab_cards')
+    .select('*, srs:srs_cards(*)')
+    .eq('id', id)
+    .eq('user_id', userId)
+    .maybeSingle();
+  check(error, 'card fetch');
+  return data ? withSrs(data, userId) : null;
 }
 
 export async function createCard(
@@ -462,51 +500,41 @@ export async function createCard(
 ): Promise<CardWithSrs> {
   const userId = cardData.user_id || DEFAULT_USER_ID;
   const supabase = getSupabaseClient();
+  if (!supabase) return memoryStore().create(cardData, srsData);
 
-  if (supabase) {
-    try {
-      const id = cardData.id || crypto.randomUUID();
-      const created_at = cardData.created_at || new Date().toISOString();
+  const id = cardData.id || crypto.randomUUID();
+  const created_at = cardData.created_at || new Date().toISOString();
 
-      const insertVocab = {
-        ...cardData,
-        id,
-        user_id: userId,
-        created_at,
-      };
+  const { data: createdVocab, error: vocabErr } = await supabase
+    .from('vocab_cards')
+    .insert({ ...cardData, id, user_id: userId, created_at })
+    .select()
+    .single();
+  check(vocabErr, 'card insert');
 
-      const { data: createdVocab, error: vocabErr } = await supabase
-        .from('vocab_cards')
-        .insert(insertVocab)
-        .select()
-        .single();
+  const insertSrs: SrsCard = {
+    ...createInitialSrsCard(id, userId),
+    ...(srsData || {}),
+    card_id: id,
+    user_id: userId,
+  };
 
-      if (!vocabErr && createdVocab) {
-        const initialSrs = createInitialSrsCard(id, userId);
-        const insertSrs: SrsCard = {
-          ...initialSrs,
-          ...(srsData || {}),
-          card_id: id,
-          user_id: userId,
-        };
+  const { data: createdSrs, error: srsErr } = await supabase
+    .from('srs_cards')
+    .insert(insertSrs)
+    .select()
+    .single();
 
-        const { data: createdSrs, error: srsErr } = await supabase
-          .from('srs_cards')
-          .insert(insertSrs)
-          .select()
-          .single();
-
-        return {
-          ...(createdVocab as VocabCard),
-          srs: (createdSrs || insertSrs) as SrsCard,
-        };
-      }
-    } catch (err) {
-      console.warn('[Lexis DB] Supabase createCard failed, falling back to local store:', err);
-    }
+  if (srsErr) {
+    // Don't leave a card that can never come due
+    await supabase.from('vocab_cards').delete().eq('id', id);
+    check(srsErr, 'schedule insert');
   }
 
-  return globalStore.create(cardData, srsData);
+  return {
+    ...(createdVocab as VocabCard),
+    srs: createdSrs as SrsCard,
+  };
 }
 
 export async function updateCard(
@@ -515,25 +543,17 @@ export async function updateCard(
   userId: string = DEFAULT_USER_ID
 ): Promise<VocabCard | null> {
   const supabase = getSupabaseClient();
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('vocab_cards')
-        .update(updates)
-        .eq('id', id)
-        .eq('user_id', userId)
-        .select()
-        .maybeSingle();
+  if (!supabase) return memoryStore().update(id, updates, userId);
 
-      if (!error && data) {
-        return data as VocabCard;
-      }
-    } catch (err) {
-      console.warn('[Lexis DB] Supabase updateCard failed, falling back:', err);
-    }
-  }
-
-  return globalStore.update(id, updates, userId);
+  const { data, error } = await supabase
+    .from('vocab_cards')
+    .update(updates)
+    .eq('id', id)
+    .eq('user_id', userId)
+    .select()
+    .maybeSingle();
+  check(error, 'card update');
+  return (data as VocabCard) || null;
 }
 
 export async function appendContextSentence(
@@ -542,37 +562,21 @@ export async function appendContextSentence(
   source?: string,
   userId: string = DEFAULT_USER_ID
 ): Promise<VocabCard | null> {
+  const supabase = getSupabaseClient();
+  if (!supabase) return memoryStore().appendContext(id, sentence, source, userId);
+
   const existing = await getCardById(id, userId);
   if (!existing) return null;
 
-  const currentSentence = existing.source_context?.sentence;
-  const newSentence = currentSentence ? `${currentSentence}\n\n${sentence}` : sentence;
-  const newSource = source || existing.source_context?.source || null;
-
-  const newSourceContext = {
-    sentence: newSentence,
-    source: newSource,
-  };
-
-  const supabase = getSupabaseClient();
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('vocab_cards')
-        .update({ source_context: newSourceContext })
-        .eq('id', id)
-        .select()
-        .maybeSingle();
-
-      if (!error && data) {
-        return data as VocabCard;
-      }
-    } catch (err) {
-      console.warn('[Lexis DB] Supabase appendContextSentence failed, falling back:', err);
-    }
-  }
-
-  return globalStore.appendContext(id, sentence, source, userId);
+  const { data, error } = await supabase
+    .from('vocab_cards')
+    .update(buildAppendedContext(existing, sentence, source))
+    .eq('id', id)
+    .eq('user_id', userId)
+    .select()
+    .maybeSingle();
+  check(error, 'context append');
+  return (data as VocabCard) || null;
 }
 
 export async function deleteCard(
@@ -580,21 +584,16 @@ export async function deleteCard(
   userId: string = DEFAULT_USER_ID
 ): Promise<boolean> {
   const supabase = getSupabaseClient();
-  if (supabase) {
-    try {
-      const { error } = await supabase
-        .from('vocab_cards')
-        .delete()
-        .eq('id', id)
-        .eq('user_id', userId);
+  if (!supabase) return memoryStore().delete(id, userId);
 
-      if (!error) return true;
-    } catch (err) {
-      console.warn('[Lexis DB] Supabase deleteCard failed, falling back:', err);
-    }
-  }
-
-  return globalStore.delete(id, userId);
+  const { data, error } = await supabase
+    .from('vocab_cards')
+    .delete()
+    .eq('id', id)
+    .eq('user_id', userId)
+    .select('id');
+  check(error, 'card delete');
+  return (data || []).length > 0;
 }
 
 export async function getDueCards(
@@ -602,31 +601,23 @@ export async function getDueCards(
   asOf: Date = new Date()
 ): Promise<CardWithSrs[]> {
   const supabase = getSupabaseClient();
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('srs_cards')
-        .select('*, vocab:vocab_cards(*)')
-        .eq('user_id', userId)
-        .lte('due', asOf.toISOString())
-        .order('due', { ascending: true });
+  if (!supabase) return memoryStore().getDue(userId, asOf);
 
-      if (!error && data) {
-        return data.map((item: any) => {
-          const vocab = Array.isArray(item.vocab) ? item.vocab[0] : item.vocab;
-          const { vocab: _, ...srs } = item;
-          return {
-            ...vocab,
-            srs,
-          } as CardWithSrs;
-        });
-      }
-    } catch (err) {
-      console.warn('[Lexis DB] Supabase getDueCards failed, falling back:', err);
-    }
-  }
+  const { data, error } = await supabase
+    .from('srs_cards')
+    .select('*, vocab:vocab_cards(*)')
+    .eq('user_id', userId)
+    .lte('due', asOf.toISOString())
+    .order('due', { ascending: true });
+  check(error, 'due queue');
 
-  return globalStore.getDue(userId, asOf);
+  return (data || [])
+    .map((item: any) => {
+      const { vocab: rawVocab, ...srs } = item;
+      const vocab = Array.isArray(rawVocab) ? rawVocab[0] : rawVocab;
+      return vocab ? ({ ...vocab, srs } as CardWithSrs) : null;
+    })
+    .filter((c): c is CardWithSrs => c !== null);
 }
 
 export async function recordReview(
@@ -642,24 +633,15 @@ export async function recordReview(
 
   const supabase = getSupabaseClient();
   if (supabase) {
-    try {
-      const { error } = await supabase
-        .from('srs_cards')
-        .update(updatedSrs)
-        .eq('card_id', cardId);
-
-      if (!error) {
-        return {
-          card: { ...existing, srs: updatedSrs },
-          recordLog,
-        };
-      }
-    } catch (err) {
-      console.warn('[Lexis DB] Supabase recordReview update failed, falling back:', err);
-    }
+    // Upsert so a card whose schedule row is missing gets one
+    const { error } = await supabase
+      .from('srs_cards')
+      .upsert(updatedSrs, { onConflict: 'card_id' });
+    check(error, 'review save');
+  } else {
+    memoryStore().updateSrs(updatedSrs);
   }
 
-  globalStore.updateSrs(updatedSrs);
   return {
     card: { ...existing, srs: updatedSrs },
     recordLog,
@@ -674,51 +656,35 @@ export async function logProductionAttempt(
   userId: string = DEFAULT_USER_ID
 ): Promise<ProductionLog> {
   const supabase = getSupabaseClient();
-  if (supabase) {
-    try {
-      const id = crypto.randomUUID();
-      const insert = {
-        id,
-        card_id: cardId,
-        user_sentence: userSentence,
-        evaluation_status: evaluationStatus,
-        feedback: feedback || null,
-        created_at: new Date().toISOString(),
-      };
-      const { data, error } = await supabase
-        .from('production_logs')
-        .insert(insert)
-        .select()
-        .single();
-
-      if (!error && data) {
-        return data as ProductionLog;
-      }
-    } catch (err) {
-      console.warn('[Lexis DB] Supabase logProductionAttempt failed, falling back:', err);
-    }
+  if (!supabase) {
+    return memoryStore().logProduction(cardId, userSentence, evaluationStatus, feedback);
   }
 
-  return globalStore.logProduction(cardId, userSentence, evaluationStatus, feedback);
+  const { data, error } = await supabase
+    .from('production_logs')
+    .insert({
+      id: crypto.randomUUID(),
+      card_id: cardId,
+      user_sentence: userSentence,
+      evaluation_status: evaluationStatus,
+      feedback: feedback || null,
+      created_at: new Date().toISOString(),
+    })
+    .select()
+    .single();
+  check(error, 'production log insert');
+  return data as ProductionLog;
 }
 
 export async function getProductionLogs(cardId: string): Promise<ProductionLog[]> {
   const supabase = getSupabaseClient();
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('production_logs')
-        .select('*')
-        .eq('card_id', cardId)
-        .order('created_at', { ascending: false });
+  if (!supabase) return memoryStore().getProductionLogs(cardId);
 
-      if (!error && data) {
-        return data as ProductionLog[];
-      }
-    } catch (err) {
-      console.warn('[Lexis DB] Supabase getProductionLogs failed, falling back:', err);
-    }
-  }
-
-  return globalStore.getProductionLogs(cardId);
+  const { data, error } = await supabase
+    .from('production_logs')
+    .select('*')
+    .eq('card_id', cardId)
+    .order('created_at', { ascending: false });
+  check(error, 'production log fetch');
+  return (data || []) as ProductionLog[];
 }

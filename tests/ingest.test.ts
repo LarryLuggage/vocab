@@ -3,20 +3,11 @@ import { NextRequest } from 'next/server';
 import { POST } from '@/app/api/ingest/route';
 
 describe('Private Token Ingestion API (/api/ingest)', () => {
-  const secretToken = 'lexis-personal-secret-2026';
+  // Token checks live in middleware.ts (see tests/auth.test.ts); the route
+  // handler itself assumes an authorized request.
+  const secretToken = 'test-token';
 
-  it('rejects unauthenticated requests with 401', async () => {
-    const req = new NextRequest('http://localhost:3000/api/ingest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ term: 'lucid' }),
-    });
-
-    const res = await POST(req);
-    expect(res.status).toBe(401);
-  });
-
-  it('accepts requests with valid Bearer token', async () => {
+  it('creates a card for a novel term', async () => {
     const uniqueTerm = `apercu-${Date.now()}`;
     const req = new NextRequest('http://localhost:3000/api/ingest', {
       method: 'POST',
