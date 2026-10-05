@@ -35,6 +35,15 @@ export default function LexiconPage() {
     const loaded = getClientCards();
     setCards(loaded);
 
+    // Check URL search parameters on mount (search, q, or term)
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const searchParam = params.get('search') || params.get('q') || params.get('term');
+      if (searchParam) {
+        setSearchQuery(searchParam);
+      }
+    }
+
     // Sync with server / Supabase API in background
     fetch('/api/cards')
       .then((res) => (res.ok ? res.json() : null))

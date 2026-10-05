@@ -18,7 +18,10 @@ import {
   Flame,
   Award,
   ChevronRight,
+  ChevronDown,
   RotateCcw,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import {
   CardWithSrs,
@@ -41,6 +44,116 @@ import { validateProductionSentence } from '@/lib/production-validator';
 import { cn } from '@/lib/utils';
 
 type ModalityMode = 'ACT-01' | 'ACT-02' | 'ACT-03';
+
+function CardFullDetails({
+  card,
+  onPlayPronunciation,
+}: {
+  card: CardWithSrs;
+  onPlayPronunciation: (word: string) => void;
+}) {
+  return (
+    <div className="space-y-4 text-left">
+      {/* Header: Term, Phonetic, Audio, POS */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <h3 className="font-serif font-bold text-2xl text-[#1c1917] capitalize tracking-tight">
+            {card.term}
+          </h3>
+          {card.phonetic && (
+            <span className="font-mono text-xs text-[#78716c] px-2 py-0.5 rounded bg-stone-100 border border-stone-200">
+              {card.phonetic}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => onPlayPronunciation(card.term)}
+            title="Listen to pronunciation"
+            aria-label="Listen to pronunciation"
+            className="p-1 rounded-full text-stone-400 hover:text-[#834832] hover:bg-[#834832]/10 transition-colors cursor-pointer"
+          >
+            <Volume2 className="w-4 h-4" />
+          </button>
+        </div>
+        <span className="px-2.5 py-1 rounded-full bg-[#f2e8e5] text-[#834832] text-xs font-sans font-semibold shrink-0">
+          {card.part_of_speech}
+        </span>
+      </div>
+
+      {/* Primary Definition */}
+      <div className="space-y-1">
+        <span className="text-[11px] font-sans font-semibold uppercase tracking-wider text-stone-400">
+          Primary Definition
+        </span>
+        <p className="text-sm sm:text-base font-serif text-[#292524] leading-relaxed">
+          {card.primary_definition}
+        </p>
+      </div>
+
+      {/* Nuance Note */}
+      {card.nuance_note && (
+        <div className="p-3.5 bg-[#fdf8f6] border border-[#eaddd7] rounded-xl text-xs space-y-1">
+          <div className="flex items-center gap-1.5 font-sans font-semibold text-[#834832]">
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Nuance & Connotative Precision</span>
+          </div>
+          <p className="font-serif text-[#4f2416] leading-relaxed">
+            {card.nuance_note}
+          </p>
+        </div>
+      )}
+
+      {/* Etymological Roots */}
+      {card.etymology?.roots?.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5 text-xs font-sans font-semibold uppercase tracking-wider text-stone-500">
+            <GitBranch className="w-3.5 h-3.5 text-[#834832]" />
+            <span>Etymological Roots</span>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap text-xs font-sans text-stone-700">
+            {card.etymology.roots.map((r, idx) => (
+              <span key={idx} className="bg-stone-100 px-2.5 py-1 rounded-lg border border-stone-200">
+                <strong className="text-stone-800">{r.origin}</strong>: <em className="text-[#834832]">{r.morpheme}</em> (“{r.meaning}”)
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Scholarly Collocations */}
+      {card.collocations?.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5 text-xs font-sans font-semibold uppercase tracking-wider text-stone-500">
+            <Layers className="w-3.5 h-3.5 text-[#834832]" />
+            <span>Collocations & Phrasal Patterns</span>
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {card.collocations.map((c, idx) => (
+              <span
+                key={idx}
+                className="px-2.5 py-0.5 rounded-full bg-stone-100 text-stone-700 text-xs font-serif italic border border-stone-200"
+              >
+                {c}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Source Citation Context */}
+      {card.source_context?.sentence && (
+        <div className="pt-2 border-t border-stone-100 text-xs font-serif italic text-stone-600 space-y-0.5">
+          <p>“{card.source_context.sentence}”</p>
+          {(card.source_context.author || card.source_context.source) && (
+            <p className="not-italic font-sans text-stone-500 text-[11px]">
+              — {[card.source_context.author, card.source_context.source, card.source_context.page].filter(Boolean).join(', ')}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function ReviewPage() {
   const [cards, setCards] = useState<CardWithSrs[]>([]);
@@ -75,6 +188,21 @@ export default function ReviewPage() {
   const [productionResult, setProductionResult] =
     useState<ProductionValidationResult | null>(null);
 
+  // Strict Answer Masking state (spoiler prevention)
+  const [isAnswerRevealed, setIsAnswerRevealed] = useState(false);
+  const [showSandboxHints, setShowSandboxHints] = useState(false);
+
+  // Pronunciation audio synthesis
+  const playPronunciation = useCallback((word: string) => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(word);
+      utterance.lang = 'en-US';
+      utterance.rate = 0.9;
+      window.speechSynthesis.speak(utterance);
+    }
+  }, []);
+
   // Load cards from local storage / API
   const refreshQueue = useCallback((includeAll: boolean = false) => {
     const all = getClientCards();
@@ -98,7 +226,7 @@ export default function ReviewPage() {
     return getSchedulePreviews(currentCard.srs);
   }, [currentCard]);
 
-  // Reset modality inputs whenever the active card changes
+  // Reset modality inputs & answer masking whenever the active card changes
   useEffect(() => {
     setClozeInput('');
     setClozeChecked(false);
@@ -107,7 +235,21 @@ export default function ReviewPage() {
     setDistinctionFeedback(null);
     setProductionSentence('');
     setProductionResult(null);
+    setIsAnswerRevealed(false);
+    setShowSandboxHints(false);
   }, [currentIndex, currentCard?.id]);
+
+  // Handle explicit answer revelation
+  const handleRevealAnswer = useCallback(() => {
+    setIsAnswerRevealed(true);
+    if (activeModality === 'ACT-01') {
+      setClozeChecked(true);
+      setClozeIsCorrect((prev) => (prev === null ? false : prev));
+    }
+    if (activeModality === 'ACT-03') {
+      setShowSandboxHints(true);
+    }
+  }, [activeModality]);
 
   // Handle checking cloze answer
   const handleCheckCloze = (e?: React.FormEvent) => {
@@ -118,9 +260,10 @@ export default function ReviewPage() {
     const target = currentCard.term.toLowerCase();
 
     // Check if input matches target or target lemma
-    const isMatch = trimmedInput === target || target.startsWith(trimmedInput) && trimmedInput.length >= 4;
+    const isMatch = trimmedInput === target || (target.startsWith(trimmedInput) && trimmedInput.length >= 4);
     setClozeIsCorrect(isMatch);
     setClozeChecked(true);
+    setIsAnswerRevealed(true);
 
     setTotalAttempts((prev) => prev + 1);
     if (isMatch) setCorrectAttempts((prev) => prev + 1);
@@ -180,6 +323,7 @@ export default function ReviewPage() {
 
     setTotalAttempts((prev) => prev + 1);
     if (isCorrect) setCorrectAttempts((prev) => prev + 1);
+    setIsAnswerRevealed(true);
   };
 
   // Handle production sentence verification
@@ -195,6 +339,8 @@ export default function ReviewPage() {
         productionSentence
       );
       setProductionResult(result);
+      setIsAnswerRevealed(true);
+      setShowSandboxHints(true);
       setTotalAttempts((prev) => prev + 1);
       if (result.evaluationStatus === 'pass') {
         setCorrectAttempts((prev) => prev + 1);
@@ -205,6 +351,8 @@ export default function ReviewPage() {
         registerDetected: 'Unverified',
         feedback: 'Verification service unreachable, but sentence recorded.',
       });
+      setIsAnswerRevealed(true);
+      setShowSandboxHints(true);
     } finally {
       setIsVerifyingProduction(false);
     }
@@ -245,7 +393,7 @@ export default function ReviewPage() {
     }
   };
 
-  // Keyboard navigation for FSRS rating (keys 1, 2, 3, 4)
+  // Keyboard navigation for Spacebar (reveal answer) and FSRS rating (keys 1, 2, 3, 4)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Don't intercept if user is typing in input or textarea
@@ -253,6 +401,13 @@ export default function ReviewPage() {
         document.activeElement?.tagName === 'INPUT' ||
         document.activeElement?.tagName === 'TEXTAREA'
       ) {
+        return;
+      }
+
+      // Spacebar to reveal answer and card details
+      if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault();
+        handleRevealAnswer();
         return;
       }
 
@@ -264,7 +419,7 @@ export default function ReviewPage() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentIndex, queue, currentCard]);
+  }, [handleRevealAnswer, currentIndex, queue, currentCard]);
 
   // Progress percentage
   const progressPercent = queue.length > 0 ? Math.round((currentIndex / queue.length) * 100) : 100;
@@ -467,14 +622,14 @@ export default function ReviewPage() {
                         key={idx}
                         className={cn(
                           'inline-block px-3 py-0.5 mx-1.5 rounded-lg border-b-2 font-mono text-base font-bold transition-all',
-                          clozeChecked
+                          clozeChecked || isAnswerRevealed
                             ? clozeIsCorrect
                               ? 'bg-emerald-100 text-emerald-900 border-emerald-500'
                               : 'bg-rose-100 text-rose-900 border-rose-500'
                             : 'bg-stone-100 border-[#834832] text-[#834832]'
                         )}
                       >
-                        {clozeChecked ? part.slice(2, -2) : '_______'}
+                        {clozeChecked || isAnswerRevealed ? part.slice(2, -2) : '_______'}
                       </span>
                     );
                   }
@@ -484,7 +639,7 @@ export default function ReviewPage() {
             </div>
 
             {/* Inline Check Form */}
-            {!clozeChecked ? (
+            {!clozeChecked && !isAnswerRevealed ? (
               <form onSubmit={handleCheckCloze} className="space-y-3">
                 <div className="flex gap-2">
                   <input
@@ -498,7 +653,7 @@ export default function ReviewPage() {
                   <button
                     type="submit"
                     disabled={!clozeInput.trim()}
-                    className="px-5 py-2.5 rounded-xl bg-[#834832] text-white text-xs font-sans font-semibold hover:bg-[#693522] transition-colors disabled:opacity-50"
+                    className="px-5 py-2.5 rounded-xl bg-[#834832] text-white text-xs font-sans font-semibold hover:bg-[#693522] transition-colors disabled:opacity-50 cursor-pointer"
                   >
                     Check
                   </button>
@@ -507,11 +662,8 @@ export default function ReviewPage() {
                   <span>Hint: {currentCard.part_of_speech} • {currentCard.etymology.roots[0]?.origin} root</span>
                   <button
                     type="button"
-                    onClick={() => {
-                      setClozeChecked(true);
-                      setClozeIsCorrect(false);
-                    }}
-                    className="underline text-stone-500 hover:text-stone-800"
+                    onClick={handleRevealAnswer}
+                    className="underline text-stone-500 hover:text-stone-800 cursor-pointer"
                   >
                     Show Answer
                   </button>
@@ -521,7 +673,7 @@ export default function ReviewPage() {
               /* Revealed Feedback */
               <div
                 className={cn(
-                  'p-4 rounded-xl space-y-2 border',
+                  'p-4 rounded-xl space-y-2 border animate-in fade-in',
                   clozeIsCorrect
                     ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
                     : 'bg-amber-50 border-amber-200 text-amber-900'
@@ -574,7 +726,7 @@ export default function ReviewPage() {
                 let cardStyle =
                   'border-stone-200 bg-stone-50/60 hover:bg-stone-100 hover:border-stone-300 text-stone-900';
 
-                if (selectedSynonym) {
+                if (selectedSynonym || isAnswerRevealed) {
                   if (isCorrectWord) {
                     cardStyle =
                       'border-emerald-500 bg-emerald-50 text-emerald-900 ring-2 ring-emerald-500/20';
@@ -590,10 +742,10 @@ export default function ReviewPage() {
                   <button
                     key={idx}
                     type="button"
-                    disabled={!!selectedSynonym}
+                    disabled={!!selectedSynonym || isAnswerRevealed}
                     onClick={() => handleSelectSynonym(option)}
                     className={cn(
-                      'p-4 rounded-xl border text-center transition-all flex flex-col items-center justify-center gap-1',
+                      'p-4 rounded-xl border text-center transition-all flex flex-col items-center justify-center gap-1 cursor-pointer disabled:cursor-default',
                       cardStyle
                     )}
                   >
@@ -609,15 +761,20 @@ export default function ReviewPage() {
             </div>
 
             {/* Feedback and Nuance Comparison */}
-            {distinctionFeedback && (
+            {(distinctionFeedback || isAnswerRevealed) && (
               <div className="p-4 rounded-xl bg-[#fdf8f6] border border-[#eaddd7] space-y-2 animate-in fade-in">
                 <div className="flex items-center gap-2 font-sans font-semibold text-xs text-[#834832]">
                   <Sparkles className="w-4 h-4" />
                   <span>Nuance Analysis</span>
                 </div>
                 <p className="text-sm font-serif text-[#4f2416] leading-relaxed">
-                  {distinctionData.comparison}
+                  {distinctionFeedback ? distinctionFeedback.explanation : distinctionData.comparison}
                 </p>
+                {distinctionFeedback && (
+                  <p className="text-xs font-serif text-stone-600 pt-1 border-t border-[#eaddd7]/70">
+                    {distinctionData.comparison}
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -656,7 +813,7 @@ export default function ReviewPage() {
                   type="button"
                   disabled={isVerifyingProduction || !productionSentence.trim()}
                   onClick={handleVerifyProduction}
-                  className="px-4 py-2 rounded-xl bg-[#834832] text-white text-xs font-sans font-semibold hover:bg-[#693522] transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                  className="px-4 py-2 rounded-xl bg-[#834832] text-white text-xs font-sans font-semibold hover:bg-[#693522] transition-colors disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
                 >
                   {isVerifyingProduction ? (
                     <>
@@ -720,50 +877,115 @@ export default function ReviewPage() {
                 )}
               </div>
             )}
+
+            {/* Collapsible Definition & Hints Drawer (ACT-03) */}
+            <div className="pt-4 border-t border-stone-200 space-y-3">
+              <button
+                type="button"
+                onClick={() => setShowSandboxHints((prev) => !prev)}
+                className="w-full flex items-center justify-between p-3.5 rounded-xl bg-stone-50 hover:bg-stone-100 border border-stone-200 text-xs font-sans font-semibold text-[#834832] transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <HelpCircle className="w-4 h-4 text-[#834832]" />
+                  <span>Definition & Hints Drawer</span>
+                  <span className="text-[11px] font-mono font-normal text-stone-500">
+                    ({showSandboxHints || isAnswerRevealed ? 'Visible' : 'Collapsed — recall meaning on your own'})
+                  </span>
+                </div>
+                <ChevronDown
+                  className={cn(
+                    'w-4 h-4 text-stone-500 transition-transform duration-200',
+                    (showSandboxHints || isAnswerRevealed) && 'rotate-180'
+                  )}
+                />
+              </button>
+
+              {!(showSandboxHints || isAnswerRevealed) && (
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 bg-stone-50/50 rounded-xl border border-dashed border-stone-300">
+                  <span className="text-xs font-sans text-stone-500">
+                    Draft your sentence before referencing the definition or roots.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleRevealAnswer}
+                    className="w-full sm:w-auto px-4 py-2 rounded-xl bg-stone-100 hover:bg-stone-200 border border-stone-300 text-[#834832] text-xs font-sans font-semibold transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    <span>Reveal Hints</span>
+                    <kbd className="hidden sm:inline-block px-1.5 py-0.5 bg-white border border-stone-300 rounded text-[10px] font-mono text-stone-500">
+                      Space
+                    </kbd>
+                  </button>
+                </div>
+              )}
+
+              {(showSandboxHints || isAnswerRevealed) && (
+                <div className="pt-2 animate-in fade-in duration-300">
+                  <CardFullDetails card={currentCard} onPlayPronunciation={playPronunciation} />
+                </div>
+              )}
+            </div>
           </div>
         )}
 
-        {/* Collapsible Card Details: Pronunciation, Roots & Nuance */}
-        <div className="pt-4 border-t border-stone-200 space-y-3">
-          <div className="flex items-baseline justify-between">
-            <div className="flex items-baseline gap-2">
-              <h3 className="font-serif font-bold text-xl text-[#1c1917] capitalize">
-                {currentCard.term}
-              </h3>
-              {currentCard.phonetic && (
-                <span className="font-mono text-xs text-[#78716c]">
-                  {currentCard.phonetic}
-                </span>
-              )}
-            </div>
-            <span className="text-xs font-sans text-[#834832] font-semibold">
-              {currentCard.part_of_speech}
-            </span>
-          </div>
-
-          <p className="text-sm font-serif text-[#44403c]">
-            {currentCard.primary_definition}
-          </p>
-
-          {currentCard.etymology.roots?.length > 0 && (
-            <div className="flex items-center gap-2 flex-wrap text-xs font-sans text-stone-600">
-              <GitBranch className="w-3.5 h-3.5 text-[#834832]" />
-              {currentCard.etymology.roots.map((r, idx) => (
-                <span key={idx} className="bg-stone-100 px-2 py-0.5 rounded border border-stone-200">
-                  {r.origin}: <em>{r.morpheme}</em> (“{r.meaning}”)
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
+        {/* --- Card Details Section for ACT-01 and ACT-02 (Masked until revealed) --- */}
+        {activeModality !== 'ACT-03' && (
+          <>
+            {!isAnswerRevealed ? (
+              <div className="pt-4 border-t border-stone-200">
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 bg-stone-50/80 rounded-xl border border-dashed border-stone-300">
+                  <div className="flex items-center gap-2 text-stone-600 text-xs font-sans">
+                    <EyeOff className="w-4 h-4 text-stone-400 shrink-0" />
+                    <span>Card details are masked to test your active recall.</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRevealAnswer}
+                    className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-[#834832] text-white hover:bg-[#693522] text-xs font-sans font-semibold transition-all shadow-sm flex items-center justify-center gap-2 group cursor-pointer"
+                  >
+                    <Eye className="w-4 h-4 transition-transform group-hover:scale-110" />
+                    <span>Reveal Answer & Card Details</span>
+                    <kbd className="hidden sm:inline-block px-1.5 py-0.5 bg-black/20 rounded text-[10px] font-mono text-white/90">
+                      Space
+                    </kbd>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="pt-4 border-t border-stone-200 animate-in fade-in duration-300">
+                <CardFullDetails card={currentCard} onPlayPronunciation={playPronunciation} />
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       {/* Ergonomic 4-Button FSRS Rating Bar (SRS-01, SRS-02) */}
-      <div className="bg-white/95 backdrop-blur-md border border-[#e7e5e4] rounded-2xl p-4 sm:p-5 shadow-sm space-y-3">
+      <div
+        className={cn(
+          'backdrop-blur-md border rounded-2xl p-4 sm:p-5 shadow-sm space-y-3 transition-all duration-300',
+          isAnswerRevealed
+            ? 'bg-white border-[#834832]/30 ring-1 ring-[#834832]/10'
+            : 'bg-white/95 border-[#e7e5e4]'
+        )}
+      >
         <div className="flex items-center justify-between text-xs font-sans text-[#78716c]">
-          <span className="font-semibold uppercase tracking-wider text-[#57534e]">
-            Grade Recall (FSRS DSR Model)
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="font-semibold uppercase tracking-wider text-[#57534e]">
+              Grade Recall (FSRS DSR Model)
+            </span>
+            {isAnswerRevealed ? (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-sans font-semibold animate-in fade-in">
+                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                Recall Revealed
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-stone-100 text-stone-500 border border-stone-200 text-[10px] font-sans font-medium">
+                <EyeOff className="w-3 h-3 text-stone-400" />
+                Answer Masked
+              </span>
+            )}
+          </div>
           <span className="hidden sm:inline font-mono text-[11px] text-[#a8a29e]">
             Keyboard Shortcuts: [ 1 ] [ 2 ] [ 3 ] [ 4 ]
           </span>

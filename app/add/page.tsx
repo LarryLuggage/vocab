@@ -23,7 +23,7 @@ import {
   addOrUpdateClientCard,
 } from '@/lib/sample-data';
 import { enrichWordClientFallback } from '@/lib/enrichment-fallback';
-import { parseZoteroCitation } from '@/lib/zotero-parser';
+import { parseShareTargetPayload } from '@/lib/share-parser';
 import { cn } from '@/lib/utils';
 
 export default function QuickCapturePage() {
@@ -49,41 +49,48 @@ export default function QuickCapturePage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Live duplicate check as user types
+  const checkDuplicate = (query: string): CardWithSrs | null => {
+    const trimmed = query.trim().toLowerCase();
+    if (!trimmed) return null;
+    const cards = getClientCards();
+    return cards.find((c) => c.term.toLowerCase() === trimmed) || null;
+  };
+
   // Autofocus word input on mount & detect Android Web Share Target params
   useEffect(() => {
     inputRef.current?.focus();
 
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
-      const incomingText = params.get('text');
-      const incomingTitle = params.get('title');
-      const incomingUrl = params.get('url');
+      const result = parseShareTargetPayload({
+        text: params.get('text'),
+        title: params.get('title'),
+        url: params.get('url'),
+        term: params.get('term'),
+        q: params.get('q'),
+        search: params.get('search'),
+      });
 
-      if (incomingText) {
-        const parsed = parseZoteroCitation(incomingText);
-        if (parsed.targetTerm) {
-          setTerm(parsed.targetTerm);
-        } else if (!incomingText.includes(' ') && incomingText.length > 1) {
-          setTerm(incomingText);
-        }
-        if (parsed.cleanedSentence && parsed.cleanedSentence !== parsed.targetTerm) {
-          setContextSentence(parsed.cleanedSentence);
-        }
-        if (parsed.author) {
-          setAuthor(parsed.author);
-          setShowSourceFields(true);
-        }
-        if (parsed.sourceTitle) {
-          setSource(parsed.sourceTitle);
-          setShowSourceFields(true);
-        } else if (incomingTitle) {
-          setSource(incomingTitle);
-          setShowSourceFields(true);
-        }
-        if (parsed.page) {
-          setPage(parsed.page);
-          setShowSourceFields(true);
-        }
+      if (result.targetTerm) {
+        setTerm(result.targetTerm);
+        const dup = checkDuplicate(result.targetTerm);
+        setDuplicateMatch(dup);
+      }
+      if (result.contextSentence) {
+        setContextSentence(result.contextSentence);
+      }
+      if (result.author) {
+        setAuthor(result.author);
+        setShowSourceFields(true);
+      }
+      if (result.sourceTitle) {
+        setSource(result.sourceTitle);
+        setShowSourceFields(true);
+      }
+      if (result.page) {
+        setPage(result.page);
+        setShowSourceFields(true);
       }
     }
   }, []);
@@ -99,14 +106,6 @@ export default function QuickCapturePage() {
     }
     return () => clearInterval(interval);
   }, [isLoading]);
-
-  // Live duplicate check as user types
-  const checkDuplicate = (query: string): CardWithSrs | null => {
-    const trimmed = query.trim().toLowerCase();
-    if (!trimmed) return null;
-    const cards = getClientCards();
-    return cards.find((c) => c.term.toLowerCase() === trimmed) || null;
-  };
 
   const handleTermChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
