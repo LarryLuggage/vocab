@@ -17,9 +17,10 @@ import {
   Plus,
   BookOpen,
   CheckCircle,
+  AlertTriangle,
 } from 'lucide-react';
 import { CardWithSrs, FSRSState } from '@/types/lexis';
-import { getClientCards } from '@/lib/sample-data';
+import { apiFetch, errorMessageOf, CARDS_UPDATED_EVENT } from '@/lib/api-client';
 import { getCardStateLabel } from '@/lib/fsrs';
 import { cn } from '@/lib/utils';
 
@@ -30,11 +31,10 @@ export default function LexiconPage() {
   const [selectedOrigin, setSelectedOrigin] = useState<string | 'all'>('all');
   const [viewMode, setViewMode] = useState<'catalog' | 'roots'>('catalog');
   const [exportNotification, setExportNotification] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    const loaded = getClientCards();
-    setCards(loaded);
-
     // Check URL search parameters on mount (search, q, or term)
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -44,27 +44,19 @@ export default function LexiconPage() {
       }
     }
 
-    // Sync with server / Supabase API in background
-    fetch('/api/cards')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((payload) => {
-        if (payload?.success && Array.isArray(payload.data) && payload.data.length > 0) {
-          // Merge server cards with local cards
-          const existingMap = new Map(loaded.map((c) => [c.id, c]));
-          for (const serverCard of payload.data) {
-            existingMap.set(serverCard.id, serverCard);
-          }
-          const merged = Array.from(existingMap.values());
-          setCards(merged);
-        }
-      })
-      .catch(() => {});
-
-    const handleUpdate = () => {
-      setCards(getClientCards());
+    const loadCards = () => {
+      apiFetch<{ data: CardWithSrs[] }>('/api/cards')
+        .then((payload) => {
+          setCards(payload.data);
+          setLoadError(null);
+        })
+        .catch((err) => setLoadError(errorMessageOf(err, 'Failed to load your lexicon.')))
+        .finally(() => setIsLoading(false));
     };
-    window.addEventListener('lexis-cards-updated', handleUpdate);
-    return () => window.removeEventListener('lexis-cards-updated', handleUpdate);
+    loadCards();
+
+    window.addEventListener(CARDS_UPDATED_EVENT, loadCards);
+    return () => window.removeEventListener(CARDS_UPDATED_EVENT, loadCards);
   }, []);
 
   // Compute stats
@@ -255,6 +247,13 @@ export default function LexiconPage() {
           </button>
         </div>
       </div>
+
+      {loadError && (
+        <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-center gap-2.5 text-rose-900 text-xs font-sans">
+          <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+          <span>Could not load your lexicon: {loadError}</span>
+        </div>
+      )}
 
       {/* Export Toast Banner */}
       {exportNotification && (
@@ -462,7 +461,9 @@ export default function LexiconPage() {
       </div>
 
       {/* Main Content View */}
-      {filteredCards.length === 0 ? (
+      {isLoading ? (
+        <p className="text-sm font-sans text-[#a8a29e] py-12 text-center">Loading your lexicon…</p>
+      ) : filteredCards.length === 0 ? (
         /* Empty State */
         <div className="text-center py-16 px-4 bg-white border border-[#e7e5e4] rounded-2xl shadow-sm space-y-4">
           <div className="inline-flex p-3 rounded-full bg-stone-100 text-stone-500">

@@ -10,36 +10,9 @@ import { parseZoteroCitation } from '@/lib/zotero-parser';
 import { IngestRequestPayload, VocabCard } from '@/types/lexis';
 import { createInitialSrsCard } from '@/lib/fsrs';
 
-const DEFAULT_SECRET_TOKEN = 'lexis-personal-secret-2026';
-
-function isAuthorized(req: NextRequest): boolean {
-  const secret = process.env.LEXIS_SECRET_TOKEN || DEFAULT_SECRET_TOKEN;
-  const authHeader = req.headers.get('authorization');
-  const customHeader = req.headers.get('x-lexis-token');
-
-  if (customHeader && customHeader === secret) return true;
-  if (authHeader) {
-    const parts = authHeader.split(' ');
-    if (parts.length === 2 && parts[0].toLowerCase() === 'bearer' && parts[1] === secret) {
-      return true;
-    }
-  }
-
-  // Also allow query param for mobile shortcut webhooks if bearer header is difficult
-  const tokenParam = req.nextUrl.searchParams.get('token');
-  if (tokenParam && tokenParam === secret) return true;
-
-  return false;
-}
+// Auth: middleware.ts requires LEXIS_SECRET_TOKEN (Bearer or x-lexis-token header)
 
 export async function POST(req: NextRequest) {
-  if (!isAuthorized(req)) {
-    return NextResponse.json(
-      { error: 'Unauthorized: Invalid or missing LEXIS_SECRET_TOKEN' },
-      { status: 401 }
-    );
-  }
-
   try {
     const body: IngestRequestPayload & { rawCitation?: string } = await req.json().catch(() => ({}));
     let { term, contextSentence, source, author, page, url } = body;
@@ -114,6 +87,9 @@ export async function POST(req: NextRequest) {
       source_context: sourceContext,
       cloze_sentences: enriched.cloze_sentences,
       distinction_matrix: enriched.distinction_matrix || null,
+      is_fallback: Boolean(enriched.is_fallback),
+      enrichment_source: enriched.enrichment_source as VocabCard['enrichment_source'],
+      fallback_reason: enriched.fallback_reason || undefined,
     };
 
     const saved = await createCard(newCardData, initialSrs);

@@ -5,38 +5,33 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { BookMarked, Plus, Sparkles, Library, Layers } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { getClientCards, getDueCards } from '@/lib/sample-data';
+import { apiFetch, CARDS_UPDATED_EVENT } from '@/lib/api-client';
 
 export default function Navbar() {
   const pathname = usePathname();
   const [dueCount, setDueCount] = useState<number>(0);
 
-  const updateCounter = () => {
-    try {
-      const cards = getClientCards();
-      const due = getDueCards(cards);
-      setDueCount(due.length);
-    } catch {
-      setDueCount(0);
-    }
-  };
+  const isUnlockPage = pathname === '/unlock';
 
   useEffect(() => {
+    if (isUnlockPage) return;
+
+    const updateCounter = () => {
+      apiFetch<{ count: number }>('/api/review')
+        .then((res) => setDueCount(res.count))
+        .catch(() => setDueCount(0));
+    };
     updateCounter();
 
-    const handleUpdate = () => updateCounter();
-    window.addEventListener('storage', handleUpdate);
-    window.addEventListener('lexis-cards-updated', handleUpdate);
-
-    // Periodic check every 30s
-    const timer = setInterval(updateCounter, 30000);
+    window.addEventListener(CARDS_UPDATED_EVENT, updateCounter);
+    // Periodic check every 60s
+    const timer = setInterval(updateCounter, 60000);
 
     return () => {
-      window.removeEventListener('storage', handleUpdate);
-      window.removeEventListener('lexis-cards-updated', handleUpdate);
+      window.removeEventListener(CARDS_UPDATED_EVENT, updateCounter);
       clearInterval(timer);
     };
-  }, []);
+  }, [isUnlockPage]);
 
   const navLinks = [
     {

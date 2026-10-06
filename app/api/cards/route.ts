@@ -99,6 +99,9 @@ export async function POST(req: NextRequest) {
         },
         cloze_sentences: rest.cloze_sentences || [`The {{c1::${cleanTerm}}} was evident.`],
         distinction_matrix: rest.distinction_matrix || null,
+        is_fallback: Boolean(rest.is_fallback),
+        enrichment_source: rest.enrichment_source || null,
+        fallback_reason: rest.fallback_reason || null,
         user_id: userId,
       };
     } else {

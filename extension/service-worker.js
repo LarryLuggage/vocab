@@ -1,7 +1,7 @@
 // Lexis Engine — Manifest V3 Background Service Worker
 
 const DEFAULT_API_URL = 'http://localhost:3000';
-const DEFAULT_API_TOKEN = 'lexis-personal-secret-2026';
+const DEFAULT_API_TOKEN = ''; // Set your LEXIS_SECRET_TOKEN in the extension options
 
 // 1. Setup Context Menus on Installation
 chrome.runtime.onInstalled.addListener(() => {
