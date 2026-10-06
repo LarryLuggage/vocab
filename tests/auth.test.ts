@@ -79,15 +79,13 @@ describe('Token auth middleware', () => {
     expect(res.headers.get('x-middleware-next')).toBe('1');
   });
 
-  it('fails closed when LEXIS_SECRET_TOKEN is not set', async () => {
+  it('lets every request through when LEXIS_SECRET_TOKEN is not set (open mode)', async () => {
     vi.stubEnv('LEXIS_SECRET_TOKEN', '');
-    const api = await middleware(
-      request('/api/cards', { headers: { authorization: 'Bearer lexis-personal-secret-2026' } })
-    );
-    expect(api.status).toBe(503);
+    const api = await middleware(request('/api/cards'));
+    expect(api.headers.get('x-middleware-next')).toBe('1');
 
     const page = await middleware(request('/lexicon'));
-    expect(page.status).toBe(307);
+    expect(page.headers.get('x-middleware-next')).toBe('1');
   });
 
   it('only allows same-origin relative redirects after unlocking', () => {

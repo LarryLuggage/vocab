@@ -6,14 +6,10 @@ export async function middleware(req: NextRequest) {
   const isApi = pathname.startsWith('/api/');
   const secret = getConfiguredToken();
 
+  // Open mode: with no LEXIS_SECRET_TOKEN set, auth is off and every request
+  // passes. Setting the variable turns the gate on for all pages and routes.
   if (!secret) {
-    if (isApi) {
-      return NextResponse.json(
-        { error: 'Server misconfigured: LEXIS_SECRET_TOKEN is not set.' },
-        { status: 503 }
-      );
-    }
-    return redirectToUnlock(req, pathname + search);
+    return NextResponse.next();
   }
 
   if (await isRequestAuthorized(req, secret)) {

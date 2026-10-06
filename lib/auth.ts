@@ -7,7 +7,8 @@ import type { NextRequest } from 'next/server';
 // Remote clients (Chrome extension, Zotero script) present the token as a
 // header; the web UI exchanges it once at /unlock for an httpOnly cookie that
 // holds a hash of the token. Rotating the token invalidates every cookie.
-// There is deliberately no default token.
+// There is no default token: when LEXIS_SECRET_TOKEN is unset, auth is off
+// entirely (open mode) rather than guarded by a guessable value.
 // ============================================================================
 
 export const SESSION_COOKIE = 'lexis_session';
