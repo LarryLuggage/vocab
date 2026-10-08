@@ -1,7 +1,128 @@
 import { NextResponse } from 'next/server';
 import { getGeminiApiKey } from '@/lib/llm/enricher';
+import { createClient } from '@supabase/supabase-js';
 
 export const dynamic = 'force-dynamic';
+
+async function probeSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+  const allowMemory = process.env.LEXIS_ALLOW_MEMORY_STORE === 'true';
+
+  const info = {
+    hasUrl: Boolean(url),
+    urlHost: url
+      ? (() => {
+          try {
+            return new URL(url).host;
+          } catch {
+            return url;
+          }
+        })()
+      : null,
+    hasServiceRoleKey: Boolean(serviceKey),
+    serviceKeyLength: serviceKey ? serviceKey.length : 0,
+    serviceKeyPrefix: serviceKey
+      ? `${serviceKey.substring(0, 5)}...${serviceKey.substring(serviceKey.length - 4)}`
+      : null,
+    hasAnonKey: Boolean(anonKey),
+    anonKeyLength: anonKey ? anonKey.length : 0,
+    allowMemoryStore: allowMemory,
+  };
+
+  if (!url) {
+    return {
+      status: allowMemory ? 'IN_MEMORY_MODE' : 'MISSING_URL',
+      info,
+      success: allowMemory,
+      message: 'NEXT_PUBLIC_SUPABASE_URL is not set.',
+      guidance: 'Add NEXT_PUBLIC_SUPABASE_URL to your environment variables.',
+    };
+  }
+
+  if (!serviceKey) {
+    return {
+      status: allowMemory ? 'IN_MEMORY_MODE' : 'MISSING_SERVICE_ROLE_KEY',
+      info,
+      success: allowMemory,
+      message:
+        'SUPABASE_SERVICE_ROLE_KEY is missing. The native Vercel/Supabase integration only configures the anon key.',
+      guidance:
+        'In Supabase Dashboard -> Project Settings -> API, copy the service_role secret key and add it to Vercel Environment Variables as SUPABASE_SERVICE_ROLE_KEY. If you need temporary preview access, set LEXIS_ALLOW_MEMORY_STORE=true.',
+    };
+  }
+
+  // Active query probe using service role key
+  try {
+    const client = createClient(url, serviceKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+
+    const { data, error } = await client
+      .from('vocab_cards')
+      .select('id, term, distinction_matrix')
+      .limit(1);
+
+    if (error) {
+      const isMissingColumn =
+        error.message.toLowerCase().includes('distinction_matrix') ||
+        error.code === '42703';
+      const isTableMissing =
+        error.message.toLowerCase().includes('relation "vocab_cards" does not exist') ||
+        error.code === '42P01';
+
+      if (isMissingColumn) {
+        return {
+          status: 'MIGRATION_PENDING',
+          info,
+          success: false,
+          error: error.message,
+          errorCode: error.code,
+          guidance:
+            'The distinction_matrix column is missing. Run migration supabase/migrations/20261005_align_schema_with_app.sql in your Supabase SQL Editor.',
+        };
+      }
+
+      if (isTableMissing) {
+        return {
+          status: 'TABLES_MISSING',
+          info,
+          success: false,
+          error: error.message,
+          errorCode: error.code,
+          guidance:
+            'The vocab_cards table does not exist. Run the initial schema migration in your Supabase SQL Editor.',
+        };
+      }
+
+      return {
+        status: 'QUERY_ERROR',
+        info,
+        success: false,
+        error: error.message,
+        errorCode: error.code,
+        guidance: `Database query failed: ${error.message}`,
+      };
+    }
+
+    return {
+      status: 'HEALTHY',
+      info,
+      success: true,
+      message: 'Supabase connected with service-role key, schema verified.',
+      cardCountSample: data?.length ?? 0,
+    };
+  } catch (err: any) {
+    return {
+      status: 'CONNECTION_ERROR',
+      info,
+      success: false,
+      error: err?.message || String(err),
+      guidance: 'Could not connect to Supabase. Check network connectivity and NEXT_PUBLIC_SUPABASE_URL.',
+    };
+  }
+}
 
 export async function GET() {
   const geminiKey = getGeminiApiKey();
@@ -10,11 +131,16 @@ export async function GET() {
   const rawNextPublicGemini = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
   const rawGeminiKeyEnv = process.env.GEMINI_KEY;
   const rawGoogleAiKey = process.env.GOOGLE_AI_KEY;
+  const secretToken = process.env.LEXIS_SECRET_TOKEN;
+
+  const supabaseProbe = await probeSupabase();
 
   const envInspection = {
     hasEffectiveGeminiKey: Boolean(geminiKey),
     geminiKeyLength: geminiKey ? geminiKey.length : 0,
-    geminiKeyPrefix: geminiKey ? `${geminiKey.substring(0, 4)}...${geminiKey.substring(geminiKey.length - 3)}` : null,
+    geminiKeyPrefix: geminiKey
+      ? `${geminiKey.substring(0, 4)}...${geminiKey.substring(geminiKey.length - 3)}`
+      : null,
     variablesChecked: {
       GEMINI_API_KEY: Boolean(rawGeminiEnv),
       GOOGLE_API_KEY: Boolean(rawGoogleEnv),
@@ -23,7 +149,9 @@ export async function GET() {
       GOOGLE_AI_KEY: Boolean(rawGoogleAiKey),
     },
     configuredModel: process.env.GEMINI_MODEL || 'gemini-3.8-flash (default)',
-    supabaseConfigured: Boolean(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL),
+    supabaseProbe: supabaseProbe.info,
+    authGated: Boolean(secretToken),
+    secretTokenLength: secretToken ? secretToken.length : 0,
     vercelEnvironment: process.env.VERCEL_ENV || 'local / not set',
     nodeEnv: process.env.NODE_ENV || 'development',
   };
@@ -36,7 +164,9 @@ export async function GET() {
   if (geminiKey) {
     let availableFromGoogle: string[] = [];
     try {
-      const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${geminiKey}`);
+      const listRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${geminiKey}`
+      );
       if (listRes.ok) {
         const listData = await listRes.json();
         if (Array.isArray(listData.models)) {
@@ -78,7 +208,8 @@ export async function GET() {
 
         if (res.ok) {
           const data = await res.json().catch(() => null);
-          const replyText = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'OK';
+          const replyText =
+            data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'OK';
           modelTests[model] = {
             success: true,
             status: res.status,
@@ -119,18 +250,32 @@ export async function GET() {
     dictionaryProbe = { success: false };
   }
 
+  // Determine Overall Status
+  let overallStatus = 'HEALTHY';
+  let guidance = 'All systems operational.';
+
+  if (!supabaseProbe.success) {
+    overallStatus = supabaseProbe.status;
+    guidance = supabaseProbe.guidance || 'Database configuration issue detected.';
+  } else if (!geminiKey) {
+    overallStatus = 'MISSING_GEMINI_KEY';
+    guidance =
+      'GEMINI_API_KEY is not available to this deployment. In Vercel Project Settings -> Environment Variables, add GEMINI_API_KEY for Production, then redeploy.';
+  } else if (!geminiProbeResult.overallSuccess) {
+    overallStatus = 'GEMINI_KEY_ERROR';
+    guidance =
+      'Google Gemini API rejected the request. Inspect geminiProbe.models for the exact error code from Google.';
+  }
+
   return NextResponse.json(
     {
-      status: geminiProbeResult.overallSuccess ? 'HEALTHY' : geminiKey ? 'KEY_ERROR' : 'MISSING_API_KEY',
+      status: overallStatus,
       timestamp: new Date().toISOString(),
       environment: envInspection,
+      supabaseProbe,
       geminiProbe: geminiProbeResult,
       dictionaryFallbackProbe: dictionaryProbe,
-      guidance: !geminiKey
-        ? 'GEMINI_API_KEY is not available to this deployment. In Vercel Project Settings -> Environment Variables, add GEMINI_API_KEY for Production, then redeploy.'
-        : !geminiProbeResult.overallSuccess
-        ? 'Google Gemini API rejected the request. Inspect geminiProbe.models for the exact error code from Google.'
-        : 'All systems operational. Gemini API is connected and responding.',
+      guidance,
     },
     { status: 200 }
   );

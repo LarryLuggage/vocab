@@ -29,10 +29,15 @@ describe('Token auth middleware', () => {
   });
 
   it('protects every API route, not just ingest', async () => {
-    for (const path of ['/api/cards/abc', '/api/export', '/api/enrich', '/api/diagnostic', '/api/review']) {
+    for (const path of ['/api/cards/abc', '/api/export', '/api/enrich', '/api/validate-production', '/api/review']) {
       const res = await middleware(request(path));
       expect(res.status, path).toBe(401);
     }
+  });
+
+  it('allows unauthenticated access to /api/diagnostic for deployment health checks', async () => {
+    const res = await middleware(request('/api/diagnostic'));
+    expect(res.headers.get('x-middleware-next')).toBe('1');
   });
 
   it('accepts a Bearer token', async () => {

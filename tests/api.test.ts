@@ -10,6 +10,7 @@ import {
 import { GET as getReviewHandler, POST as postReviewHandler } from '@/app/api/review/route';
 import { POST as validateProductionHandler } from '@/app/api/validate-production/route';
 import { GET as exportHandler } from '@/app/api/export/route';
+import { GET as diagnosticHandler } from '@/app/api/diagnostic/route';
 import { resetDbStore } from '@/lib/db';
 
 describe('Lexis Engine API Route Handlers', () => {
@@ -238,6 +239,20 @@ describe('Lexis Engine API Route Handlers', () => {
       expect(csvText).toContain('Term,Part of Speech');
       expect(csvText).toContain('"perspicacious"');
       expect(csvText).toContain('"solipsism"');
+    });
+  });
+
+  describe('GET /api/diagnostic', () => {
+    it('returns diagnostic inspection payload including environment and supabase probe', async () => {
+      const res = await diagnosticHandler();
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.timestamp).toBeDefined();
+      expect(json.environment).toBeDefined();
+      expect(json.supabaseProbe).toBeDefined();
+      expect(json.geminiProbe).toBeDefined();
+      expect(json.dictionaryFallbackProbe).toBeDefined();
+      expect(json.guidance).toBeDefined();
     });
   });
 });

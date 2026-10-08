@@ -4,6 +4,12 @@ import { getConfiguredToken, isRequestAuthorized } from '@/lib/auth';
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
   const isApi = pathname.startsWith('/api/');
+
+  // Diagnostic endpoint is always publicly accessible for deployment troubleshooting
+  if (pathname === '/api/diagnostic') {
+    return NextResponse.next();
+  }
+
   const secret = getConfiguredToken();
 
   // Open mode: with no LEXIS_SECRET_TOKEN set, auth is off and every request
@@ -33,8 +39,8 @@ function redirectToUnlock(req: NextRequest, next: string) {
 }
 
 export const config = {
-  // Everything except the unlock flow and assets the PWA install needs unauthenticated
+  // Everything except the unlock flow, diagnostic probe, and assets the PWA install needs unauthenticated
   matcher: [
-    '/((?!unlock|api/session|_next/static|_next/image|favicon\\.ico|icon\\.svg|manifest\\.json).*)',
+    '/((?!unlock|api/session|api/diagnostic|_next/static|_next/image|favicon\\.ico|icon\\.svg|manifest\\.json).*)',
   ],
 };
