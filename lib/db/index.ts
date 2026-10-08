@@ -21,7 +21,9 @@ export { DEFAULT_USER_ID };
 const supabaseUrl =
   process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
 const supabaseKey =
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SECRET_KEY ||
+  process.env.SUPABASE_SERVICE_KEY;
 
 function isLiveSupabaseConfigured(): boolean {
   if (!supabaseUrl || !supabaseKey) return false;
@@ -374,8 +376,8 @@ const globalForStore = globalThis as unknown as { __lexisMemoryStore?: LocalVoca
 function memoryStore(): LocalVocabStore {
   if (process.env.NODE_ENV === 'production' && process.env.LEXIS_ALLOW_MEMORY_STORE !== 'true') {
     const hint = supabaseUrl && !supabaseKey
-      ? 'NEXT_PUBLIC_SUPABASE_URL is set but SUPABASE_SERVICE_ROLE_KEY is missing.'
-      : 'Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.';
+      ? 'NEXT_PUBLIC_SUPABASE_URL is set but SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY) is missing.'
+      : 'Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY).';
     throw new DbError(
       `Database not configured: ${hint} Refusing to use the in-memory store in production because writes would be lost.`
     );

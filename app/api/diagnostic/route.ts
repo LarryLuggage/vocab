@@ -6,7 +6,10 @@ export const dynamic = 'force-dynamic';
 
 async function probeSupabase() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
+  const serviceKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SECRET_KEY ||
+    process.env.SUPABASE_SERVICE_KEY;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
   const allowMemory = process.env.LEXIS_ALLOW_MEMORY_STORE === 'true';
 
@@ -47,9 +50,9 @@ async function probeSupabase() {
       info,
       success: allowMemory,
       message:
-        'SUPABASE_SERVICE_ROLE_KEY is missing. The native Vercel/Supabase integration only configures the anon key.',
+        'Database secret key is missing. The native Vercel/Supabase integration only configures the publishable/anon key.',
       guidance:
-        'In Supabase Dashboard -> Project Settings -> API, copy the service_role secret key and add it to Vercel Environment Variables as SUPABASE_SERVICE_ROLE_KEY. If you need temporary preview access, set LEXIS_ALLOW_MEMORY_STORE=true.',
+        'In Supabase Dashboard -> Project Settings -> API, copy the "Default secret key" and add it to Vercel Environment Variables as SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY). If you need temporary preview access, set LEXIS_ALLOW_MEMORY_STORE=true.',
     };
   }
 
