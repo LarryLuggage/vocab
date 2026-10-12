@@ -39,6 +39,9 @@ export const DistinctionMatrixSchema = z.object({
 
 export const LexicalEnrichmentSchema = z.object({
   term: z.string().min(1, 'Term is required'),
+  language: z.enum(['en', 'es']).optional().default('en'),
+  gender: z.enum(['masculine', 'feminine', 'neuter']).nullable().optional(),
+  english_gloss: z.string().nullable().optional(),
   part_of_speech: z.string().min(1, 'Part of speech is required'),
   phonetic: z.string().nullable().optional(),
   primary_definition: z.string().min(1, 'Primary definition is required'),

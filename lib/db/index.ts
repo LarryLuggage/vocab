@@ -56,16 +56,42 @@ export function getSupabaseClient(): SupabaseClient | null {
 // ============================================================================
 export function extractLemmaStem(word: string): string {
   const normalized = word.toLowerCase().trim();
-  // Strip non-alphanumeric
-  const cleaned = normalized.replace(/[^a-z]/g, '');
+  // Strip accents and clean non-alphabetic, keeping ñ
+  const cleaned = normalized
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zñ]/g, '');
 
-  // Common high-register derivational and inflectional suffixes
+  // Common high-register English derivational suffixes + Spanish verb & noun inflections
   const suffixes = [
-    'istically', 'istical', 'istic', 'istically',
+    // English long derivations
+    'istically', 'istical', 'istic',
     'ously', 'aciousness', 'acity', 'acious',
     'ical', 'ishly', 'fully', 'ingly',
     'ness', 'ment', 'able', 'ible', 'tion', 'sion',
     'ence', 'ance', 'ling', 'hood', 'less',
+    // Spanish verbal inflections & nominalizations
+    'izaciones', 'izacion', 'mientos', 'miento',
+    'aciones', 'acion', 'iciones', 'icion',
+    'amente', 'emente', 'mente',
+    'anzas', 'anza', 'ezas', 'eza', 'idades', 'idad',
+    'iesemos', 'asemos', 'ieramos', 'aramos',
+    'ariamos', 'eriamos', 'iriamos',
+    'aremos', 'eremos', 'iremos', 'abamos',
+    'ieron', 'iesen', 'ieran', 'arían', 'arian',
+    'erían', 'erian', 'irían', 'irian',
+    'arías', 'arias', 'erías', 'erias', 'irías', 'irias',
+    'iendo', 'ando', 'abais', 'asteis', 'isteis', 'aron',
+    'aría', 'aria', 'ería', 'eria', 'iría', 'iria',
+    'aras', 'eras', 'iras', 'aran', 'eran', 'iran',
+    'ases', 'eses', 'ises', 'asen', 'esen', 'isen',
+    'iese', 'iera', 'aste', 'iste', 'aban', 'abas',
+    'adas', 'ados', 'idas', 'idos',
+    'ada', 'ado', 'ida', 'ido',
+    'aba', 'ian', 'ias', 'iamos', 'ia',
+    'io', 'ia',
+    'ar', 'er', 'ir',
+    // English short inflections
     'ism', 'ist', 'ive', 'ous', 'ing', 'ied', 'ies',
     'ed', 'er', 'est', 'ly', 'es', 's'
   ];
@@ -90,11 +116,16 @@ export function areTermsVariants(term1: string, term2: string): boolean {
   // If stems match and are at least 4 chars
   if (stem1.length >= 4 && stem1 === stem2) return true;
 
-  // Check prefix containment if length >= 5 (e.g. perspicac-ious vs perspicac-ity)
-  const minLen = Math.min(t1.length, t2.length);
+  // Normalized string equality check (ignoring diacritics)
+  const norm1 = t1.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zñ]/g, '');
+  const norm2 = t2.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zñ]/g, '');
+  if (norm1 === norm2) return true;
+
+  // Check prefix containment if length >= 6 (e.g. perspicac-ious vs perspicac-ity)
+  const minLen = Math.min(norm1.length, norm2.length);
   if (minLen >= 6) {
-    const commonPrefixLen = getCommonPrefixLength(t1, t2);
-    if (commonPrefixLen >= 6 && Math.abs(t1.length - t2.length) <= 5) {
+    const commonPrefixLen = getCommonPrefixLength(norm1, norm2);
+    if (commonPrefixLen >= 6 && Math.abs(norm1.length - norm2.length) <= 5) {
       return true;
     }
   }
@@ -159,7 +190,10 @@ class LocalVocabStore {
     const samples = createSampleCards(userId);
     for (const sample of samples) {
       const { srs, ...vocab } = sample;
-      this.cards.set(vocab.id, vocab);
+      this.cards.set(vocab.id, {
+        ...vocab,
+        language: vocab.language || 'en',
+      });
       this.srs.set(srs.card_id, srs);
     }
   }
@@ -191,6 +225,7 @@ class LocalVocabStore {
   public list(params?: {
     search?: string;
     pos?: string;
+    language?: string;
     userId?: string;
     limit?: number;
     offset?: number;
@@ -198,11 +233,15 @@ class LocalVocabStore {
     const userId = params?.userId || DEFAULT_USER_ID;
     const search = params?.search?.toLowerCase().trim();
     const pos = params?.pos?.toLowerCase().trim();
+    const language = params?.language?.toLowerCase().trim();
 
     let results: CardWithSrs[] = [];
 
     for (const card of this.cards.values()) {
       if (userId && card.user_id !== userId && card.user_id !== DEFAULT_USER_ID) {
+        continue;
+      }
+      if (language && (card.language || 'en') !== language) {
         continue;
       }
       if (pos && card.part_of_speech.toLowerCase() !== pos) {
@@ -212,10 +251,11 @@ class LocalVocabStore {
         const matchesTerm = card.term.toLowerCase().includes(search);
         const matchesDef = card.primary_definition.toLowerCase().includes(search);
         const matchesNuance = card.nuance_note?.toLowerCase().includes(search) ?? false;
+        const matchesGloss = card.english_gloss?.toLowerCase().includes(search) ?? false;
         const matchesRoots = card.etymology.roots.some(
           r => r.morpheme.toLowerCase().includes(search) || r.meaning.toLowerCase().includes(search)
         );
-        if (!matchesTerm && !matchesDef && !matchesNuance && !matchesRoots) {
+        if (!matchesTerm && !matchesDef && !matchesNuance && !matchesGloss && !matchesRoots) {
           continue;
         }
       }
@@ -244,6 +284,9 @@ class LocalVocabStore {
       ...cardData,
       id,
       user_id: userId,
+      language: cardData.language || 'en',
+      gender: cardData.gender || null,
+      english_gloss: cardData.english_gloss || null,
       created_at,
     };
 
@@ -307,12 +350,14 @@ class LocalVocabStore {
     return true;
   }
 
-  public getDue(userId: string = DEFAULT_USER_ID, asOf: Date = new Date()): CardWithSrs[] {
+  public getDue(userId: string = DEFAULT_USER_ID, asOf: Date = new Date(), language?: string): CardWithSrs[] {
     const dueTime = asOf.getTime();
+    const langClean = language?.toLowerCase().trim();
     const dueCards: CardWithSrs[] = [];
 
     for (const card of this.cards.values()) {
       if (userId && card.user_id !== userId && card.user_id !== DEFAULT_USER_ID) continue;
+      if (langClean && (card.language || 'en') !== langClean) continue;
       const srs = this.srs.get(card.id);
       if (srs) {
         const cardDueDate = new Date(srs.due).getTime();
@@ -446,6 +491,7 @@ export async function findCardByTerm(
 export async function listCards(params?: {
   search?: string;
   pos?: string;
+  language?: string;
   userId?: string;
   limit?: number;
   offset?: number;
@@ -460,6 +506,9 @@ export async function listCards(params?: {
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
 
+  if (params?.language) {
+    query = query.eq('language', params.language.toLowerCase().trim());
+  }
   if (params?.pos) {
     query = query.ilike('part_of_speech', escapeLikePattern(params.pos));
   }
@@ -507,9 +556,19 @@ export async function createCard(
   const id = cardData.id || crypto.randomUUID();
   const created_at = cardData.created_at || new Date().toISOString();
 
+  const insertVocab = {
+    ...cardData,
+    id,
+    user_id: userId,
+    language: cardData.language || 'en',
+    gender: cardData.gender || null,
+    english_gloss: cardData.english_gloss || null,
+    created_at,
+  };
+
   const { data: createdVocab, error: vocabErr } = await supabase
     .from('vocab_cards')
-    .insert({ ...cardData, id, user_id: userId, created_at })
+    .insert(insertVocab)
     .select()
     .single();
   check(vocabErr, 'card insert');
@@ -600,10 +659,11 @@ export async function deleteCard(
 
 export async function getDueCards(
   userId: string = DEFAULT_USER_ID,
-  asOf: Date = new Date()
+  asOf: Date = new Date(),
+  language?: string
 ): Promise<CardWithSrs[]> {
   const supabase = getSupabaseClient();
-  if (!supabase) return memoryStore().getDue(userId, asOf);
+  if (!supabase) return memoryStore().getDue(userId, asOf, language);
 
   const { data, error } = await supabase
     .from('srs_cards')
@@ -613,13 +673,19 @@ export async function getDueCards(
     .order('due', { ascending: true });
   check(error, 'due queue');
 
-  return (data || [])
+  const langClean = language?.toLowerCase().trim();
+  let cards = (data || [])
     .map((item: any) => {
       const { vocab: rawVocab, ...srs } = item;
       const vocab = Array.isArray(rawVocab) ? rawVocab[0] : rawVocab;
       return vocab ? ({ ...vocab, srs } as CardWithSrs) : null;
     })
     .filter((c): c is CardWithSrs => c !== null);
+
+  if (langClean) {
+    cards = cards.filter((c) => (c.language || 'en') === langClean);
+  }
+  return cards;
 }
 
 export async function recordReview(

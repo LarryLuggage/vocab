@@ -37,6 +37,7 @@ import {
   getCardStateLabel,
 } from '@/lib/fsrs';
 import { validateProductionSentence } from '@/lib/production-validator';
+import { normalizeDiacritics, formatGenderBadge } from '@/lib/language';
 import { cn } from '@/lib/utils';
 
 type ModalityMode = 'ACT-01' | 'ACT-02' | 'ACT-03';
@@ -46,11 +47,14 @@ function CardFullDetails({
   onPlayPronunciation,
 }: {
   card: CardWithSrs;
-  onPlayPronunciation: (word: string) => void;
+  onPlayPronunciation: (word: string, language?: string) => void;
 }) {
+  const isSpanish = (card.language || 'en') === 'es';
+  const genderBadge = isSpanish ? formatGenderBadge(card.gender, card.part_of_speech) : null;
+
   return (
     <div className="space-y-4 text-left">
-      {/* Header: Term, Phonetic, Audio, POS */}
+      {/* Header: Term, Phonetic, Audio, Language Badge, POS, Gender Badge */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-2.5 flex-wrap">
           <h3 className="font-serif font-bold text-2xl text-[#1c1917] capitalize tracking-tight">
@@ -63,13 +67,25 @@ function CardFullDetails({
           )}
           <button
             type="button"
-            onClick={() => onPlayPronunciation(card.term)}
+            onClick={() => onPlayPronunciation(card.term, card.language)}
             title="Listen to pronunciation"
             aria-label="Listen to pronunciation"
             className="p-1 rounded-full text-stone-400 hover:text-[#834832] hover:bg-[#834832]/10 transition-colors cursor-pointer"
           >
             <Volume2 className="w-4 h-4" />
           </button>
+          {/* Language Indicator Badge */}
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-sans font-bold uppercase tracking-wider bg-stone-100 text-stone-700 border border-stone-200">
+            {isSpanish ? '🇪🇸 Español' : '🇬🇧 English'}
+          </span>
+          {/* Grammatical Gender Badge for Spanish Cards */}
+          {genderBadge && (
+            <span className="px-2.5 py-0.5 rounded-full text-xs font-sans font-semibold bg-amber-50 text-amber-900 border border-amber-300 flex items-center gap-1">
+              <span className="font-serif italic font-bold">{genderBadge.article}</span>
+              <span>•</span>
+              <span>{genderBadge.label}</span>
+            </span>
+          )}
         </div>
         <span className="px-2.5 py-1 rounded-full bg-[#f2e8e5] text-[#834832] text-xs font-sans font-semibold shrink-0">
           {card.part_of_speech}
@@ -85,6 +101,19 @@ function CardFullDetails({
           {card.primary_definition}
         </p>
       </div>
+
+      {/* English Gloss Anchor (For Spanish cards) */}
+      {isSpanish && card.english_gloss && (
+        <div className="p-3 bg-[#f0f9ff] border border-[#bae6fd] rounded-xl text-xs space-y-1 animate-in fade-in">
+          <div className="flex items-center gap-1.5 font-sans font-semibold text-[#0369a1] uppercase tracking-wider">
+            <BookOpen className="w-3.5 h-3.5" />
+            <span>English Anchor / Gloss</span>
+          </div>
+          <p className="font-serif italic text-[#0c4a6e] font-medium leading-relaxed text-sm">
+            “{card.english_gloss}”
+          </p>
+        </div>
+      )}
 
       {/* Nuance Note */}
       {card.nuance_note && (
@@ -152,7 +181,8 @@ function CardFullDetails({
 }
 
 export default function ReviewPage() {
-  const [queue, setQueue] = useState<CardWithSrs[]>([]);
+  const [rawQueue, setRawQueue] = useState<CardWithSrs[]>([]);
+  const [selectedLanguage, setSelectedLanguage] = useState<'all' | 'en' | 'es'>('all');
   const [currentIndex, setCurrentIndex] = useState(0);
   const [drillAll, setDrillAll] = useState(false);
   const [sessionCompleted, setSessionCompleted] = useState(false);
@@ -160,6 +190,20 @@ export default function ReviewPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSavingRating, setIsSavingRating] = useState(false);
   const [ratingError, setRatingError] = useState<string | null>(null);
+
+  // Queue Counts for Language Filter Pills
+  const languageCounts = useMemo(() => {
+    const totalDue = rawQueue.length;
+    const enDue = rawQueue.filter((c) => (c.language || 'en') === 'en').length;
+    const esDue = rawQueue.filter((c) => c.language === 'es').length;
+    return { totalDue, enDue, esDue };
+  }, [rawQueue]);
+
+  // Filtered queue based on selected language
+  const queue = useMemo(() => {
+    if (selectedLanguage === 'all') return rawQueue;
+    return rawQueue.filter((c) => (c.language || 'en') === selectedLanguage);
+  }, [rawQueue, selectedLanguage]);
 
   // Session Statistics
   const [reviewedCount, setReviewedCount] = useState(0);
@@ -173,6 +217,7 @@ export default function ReviewPage() {
   const [clozeInput, setClozeInput] = useState('');
   const [clozeChecked, setClozeChecked] = useState(false);
   const [clozeIsCorrect, setClozeIsCorrect] = useState<boolean | null>(null);
+  const [omittedAccents, setOmittedAccents] = useState(false);
 
   // Modality 2: Distinction Matrix state
   const [selectedSynonym, setSelectedSynonym] = useState<string | null>(null);
@@ -191,12 +236,12 @@ export default function ReviewPage() {
   const [isAnswerRevealed, setIsAnswerRevealed] = useState(false);
   const [showSandboxHints, setShowSandboxHints] = useState(false);
 
-  // Pronunciation audio synthesis
-  const playPronunciation = useCallback((word: string) => {
+  // Pronunciation audio synthesis with dual-language support
+  const playPronunciation = useCallback((word: string, language?: string) => {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(word);
-      utterance.lang = 'en-US';
+      utterance.lang = language === 'es' ? 'es-ES' : 'en-US';
       utterance.rate = 0.9;
       window.speechSynthesis.speak(utterance);
     }
@@ -208,7 +253,7 @@ export default function ReviewPage() {
     setLoadError(null);
     try {
       const res = await apiFetch<{ data: CardWithSrs[] }>(includeAll ? '/api/cards' : '/api/review');
-      setQueue(res.data);
+      setRawQueue(res.data);
       setCurrentIndex(0);
       setSessionCompleted(res.data.length === 0);
     } catch (err) {
@@ -236,6 +281,7 @@ export default function ReviewPage() {
     setClozeInput('');
     setClozeChecked(false);
     setClozeIsCorrect(null);
+    setOmittedAccents(false);
     setSelectedSynonym(null);
     setDistinctionFeedback(null);
     setProductionSentence('');
@@ -256,16 +302,24 @@ export default function ReviewPage() {
     }
   }, [activeModality]);
 
-  // Handle checking cloze answer
+  // Handle checking cloze answer with diacritic-tolerant verification for Spanish
   const handleCheckCloze = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!currentCard || clozeChecked) return;
 
-    const trimmedInput = clozeInput.trim().toLowerCase();
-    const target = currentCard.term.toLowerCase();
+    const trimmedInput = clozeInput.trim();
+    const target = currentCard.term.trim();
 
-    // Check if input matches target or target lemma
-    const isMatch = trimmedInput === target || (target.startsWith(trimmedInput) && trimmedInput.length >= 4);
+    const normInput = normalizeDiacritics(trimmedInput);
+    const normTarget = normalizeDiacritics(target);
+
+    // Diacritic-tolerant verification
+    const isExactMatch = normInput === normTarget;
+    const isPrefixMatch = normTarget.startsWith(normInput) && normInput.length >= 4;
+    const isMatch = isExactMatch || isPrefixMatch;
+
+    const hadOmittedAccents = isMatch && trimmedInput.toLowerCase() !== target.toLowerCase();
+    setOmittedAccents(hadOmittedAccents);
     setClozeIsCorrect(isMatch);
     setClozeChecked(true);
     setIsAnswerRevealed(true);
@@ -319,11 +373,19 @@ export default function ReviewPage() {
 
     const isCorrect =
       chosenWord.toLowerCase() === distinctionData.correctWord.toLowerCase();
+
+    const isSpanish = (currentCard?.language || 'en') === 'es';
+    const explanation = isCorrect
+      ? (isSpanish
+          ? `¡Correcto! "${chosenWord}" se ajusta al registro especificado (${distinctionData.promptTone}).`
+          : `Correct! "${chosenWord}" matches the specified register (${distinctionData.promptTone}).`)
+      : (isSpanish
+          ? `No del todo. "${chosenWord}" tiene un matiz diferente; "${distinctionData.correctWord}" es la opción idónea para ${distinctionData.promptTone}.`
+          : `Not quite. "${chosenWord}" carries a different tone; "${distinctionData.correctWord}" is calibrated for ${distinctionData.promptTone}.`);
+
     setDistinctionFeedback({
       correct: isCorrect,
-      explanation: isCorrect
-        ? `Correct! "${chosenWord}" matches the specified register (${distinctionData.promptTone}).`
-        : `Not quite. "${chosenWord}" carries a different tone; "${distinctionData.correctWord}" is calibrated for ${distinctionData.promptTone}.`,
+      explanation,
     });
 
     setTotalAttempts((prev) => prev + 1);
@@ -453,6 +515,43 @@ export default function ReviewPage() {
 
   // Session Completed Screen
   if (sessionCompleted || !currentCard) {
+    if (rawQueue.length > 0 && queue.length === 0) {
+      return (
+        <div className="max-w-2xl mx-auto py-12 px-4 text-center space-y-6 animate-in fade-in duration-300">
+          <div className="inline-flex p-4 rounded-full bg-[#834832]/10 text-[#834832] ring-8 ring-[#834832]/5">
+            <BookOpen className="w-10 h-10" />
+          </div>
+          <div className="space-y-2">
+            <h1 className="text-3xl font-serif font-bold text-[#1c1917]">
+              No {selectedLanguage === 'es' ? 'Spanish' : 'English'} Cards Due
+            </h1>
+            <p className="text-sm font-sans text-[#78716c] max-w-md mx-auto">
+              There are no {selectedLanguage === 'es' ? 'Spanish' : 'English'} cards currently due in your review queue. You have {rawQueue.length} total card{rawQueue.length === 1 ? '' : 's'} available to practice across all languages.
+            </p>
+          </div>
+          <div className="flex items-center justify-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedLanguage('all');
+                setCurrentIndex(0);
+                setSessionCompleted(false);
+              }}
+              className="px-6 py-3 rounded-full bg-[#834832] text-white text-sm font-sans font-semibold hover:bg-[#693522] transition-colors shadow-sm"
+            >
+              Practice All Languages ({rawQueue.length} cards)
+            </button>
+            <Link
+              href="/lexicon"
+              className="px-6 py-3 rounded-full border border-stone-300 text-stone-700 hover:bg-stone-100 text-sm font-sans font-semibold transition-colors"
+            >
+              Return to Lexicon
+            </Link>
+          </div>
+        </div>
+      );
+    }
+
     const accuracy =
       totalAttempts > 0 ? Math.round((correctAttempts / totalAttempts) * 100) : 100;
 
@@ -554,21 +653,85 @@ export default function ReviewPage() {
     <div className="max-w-3xl mx-auto space-y-6 animate-in fade-in duration-300">
       {/* Top Header: Queue Manager & Progress */}
       <div className="space-y-3">
-        <div className="flex items-center justify-between text-xs font-sans">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-sans">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold uppercase tracking-wider text-[#834832]">
               FSRS Review Queue
             </span>
             <span className="px-2 py-0.5 rounded-full bg-[#f2e8e5] text-[#834832] font-semibold text-[11px]">
-              Card {currentIndex + 1} of {queue.length}
+              Card {queue.length > 0 ? currentIndex + 1 : 0} of {queue.length}
             </span>
             <span className="px-2 py-0.5 rounded-full bg-stone-100 text-stone-600 font-mono text-[11px]">
               {getCardStateLabel(currentCard.srs.state)}
             </span>
+            <span className="px-2 py-0.5 rounded-full bg-stone-100 text-stone-700 font-bold text-[10px] uppercase border border-stone-200">
+              {(currentCard.language || 'en') === 'es' ? '🇪🇸 ES' : '🇬🇧 EN'}
+            </span>
+            {(currentCard.language || 'en') === 'es' && currentCard.gender && (
+              <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-900 font-bold text-[10px] border border-amber-300">
+                {formatGenderBadge(currentCard.gender, currentCard.part_of_speech)?.article || currentCard.gender}
+              </span>
+            )}
           </div>
 
-          <div className="text-[#78716c] font-mono text-[11px]">
-            {queue.length - currentIndex} remaining
+          {/* Queue Language Filter Pill */}
+          <div className="inline-flex items-center rounded-lg border border-stone-200 p-0.5 bg-stone-100/70 text-xs font-sans self-start sm:self-auto">
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedLanguage('all');
+                setCurrentIndex(0);
+              }}
+              className={cn(
+                'px-2.5 py-1 rounded-md transition-all font-medium flex items-center gap-1',
+                selectedLanguage === 'all'
+                  ? 'bg-white text-[#834832] shadow-xs font-semibold'
+                  : 'text-stone-600 hover:text-stone-900'
+              )}
+            >
+              <span>All</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-stone-200/80 text-stone-700">
+                {languageCounts.totalDue}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedLanguage('en');
+                setCurrentIndex(0);
+              }}
+              className={cn(
+                'px-2.5 py-1 rounded-md transition-all font-medium flex items-center gap-1',
+                selectedLanguage === 'en'
+                  ? 'bg-white text-[#834832] shadow-xs font-semibold'
+                  : 'text-stone-600 hover:text-stone-900'
+              )}
+            >
+              <span>🇬🇧 English</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-stone-200/80 text-stone-700">
+                {languageCounts.enDue}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedLanguage('es');
+                setCurrentIndex(0);
+              }}
+              className={cn(
+                'px-2.5 py-1 rounded-md transition-all font-medium flex items-center gap-1',
+                selectedLanguage === 'es'
+                  ? 'bg-white text-[#834832] shadow-xs font-semibold'
+                  : 'text-stone-600 hover:text-stone-900'
+              )}
+            >
+              <span>🇪🇸 Español</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-stone-200/80 text-stone-700">
+                {languageCounts.esDue}
+              </span>
+            </button>
           </div>
         </div>
 
@@ -674,7 +837,11 @@ export default function ReviewPage() {
                     autoFocus
                     value={clozeInput}
                     onChange={(e) => setClozeInput(e.target.value)}
-                    placeholder="Type the target word..."
+                    placeholder={
+                      (currentCard.language || 'en') === 'es'
+                        ? 'Escribe la palabra objetivo...'
+                        : 'Type the target word...'
+                    }
                     className="flex-1 text-base font-serif px-4 py-2.5 rounded-xl border border-stone-300 focus:outline-none focus:ring-2 focus:ring-[#834832]"
                   />
                   <button
@@ -682,17 +849,23 @@ export default function ReviewPage() {
                     disabled={!clozeInput.trim()}
                     className="px-5 py-2.5 rounded-xl bg-[#834832] text-white text-xs font-sans font-semibold hover:bg-[#693522] transition-colors disabled:opacity-50 cursor-pointer"
                   >
-                    Check
+                    {(currentCard.language || 'en') === 'es' ? 'Comprobar' : 'Check'}
                   </button>
                 </div>
                 <div className="flex items-center justify-between text-xs font-sans text-[#78716c]">
-                  <span>Hint: {currentCard.part_of_speech} • {currentCard.etymology.roots[0]?.origin} root</span>
+                  <span>
+                    Hint: {currentCard.part_of_speech}
+                    {(currentCard.language || 'en') === 'es' && currentCard.gender
+                      ? ` (${formatGenderBadge(currentCard.gender, currentCard.part_of_speech)?.label || currentCard.gender})`
+                      : ''}{' '}
+                    • {currentCard.etymology.roots[0]?.origin || 'Lexical'} root
+                  </span>
                   <button
                     type="button"
                     onClick={handleRevealAnswer}
                     className="underline text-stone-500 hover:text-stone-800 cursor-pointer"
                   >
-                    Show Answer
+                    {(currentCard.language || 'en') === 'es' ? 'Mostrar respuesta' : 'Show Answer'}
                   </button>
                 </div>
               </form>
@@ -710,18 +883,34 @@ export default function ReviewPage() {
                   {clozeIsCorrect ? (
                     <>
                       <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                      <span>Correct Recall!</span>
+                      <span>
+                        Correct Recall!
+                        {omittedAccents && (
+                          <span className="font-normal text-emerald-800 ml-1.5">
+                            (Accented form:{' '}
+                            <strong className="font-serif capitalize">{currentCard.term}</strong>)
+                          </span>
+                        )}
+                      </span>
                     </>
                   ) : (
                     <>
                       <XCircle className="w-5 h-5 text-amber-600" />
-                      <span>Target Word: <strong className="font-serif capitalize">{currentCard.term}</strong></span>
+                      <span>
+                        Target Word:{' '}
+                        <strong className="font-serif capitalize">{currentCard.term}</strong>
+                      </span>
                     </>
                   )}
                 </div>
                 <p className="text-sm font-serif">
                   {currentCard.primary_definition}
                 </p>
+                {(currentCard.language || 'en') === 'es' && currentCard.english_gloss && (
+                  <p className="text-xs font-serif italic text-emerald-950 pt-1.5 border-t border-emerald-200/60">
+                    English Anchor: “{currentCard.english_gloss}”
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -731,15 +920,32 @@ export default function ReviewPage() {
         {activeModality === 'ACT-02' && distinctionData && (
           <div className="space-y-6">
             <div className="space-y-2">
-              <span className="text-xs font-sans font-semibold uppercase tracking-wider text-[#a8a29e]">
-                Tone & Register Differentiation
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-sans font-semibold uppercase tracking-wider text-[#a8a29e]">
+                  {currentCard.language === 'es' ? 'Diferenciación de Registro y Matiz' : 'Tone & Register Differentiation'}
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-sans font-bold uppercase tracking-wider bg-stone-100 text-stone-700">
+                  {currentCard.language === 'es' ? '🇪🇸 Español' : '🇬🇧 English'}
+                </span>
+              </div>
               <p className="text-base sm:text-lg font-serif text-[#1c1917]">
-                Which of the following words is most appropriate for:{' '}
-                <strong className="text-[#834832] underline decoration-stone-300">
-                  {distinctionData.promptTone}
-                </strong>
-                ?
+                {currentCard.language === 'es' ? (
+                  <>
+                    ¿Cuál de las siguientes palabras es más apropiada para el registro:{' '}
+                    <strong className="text-[#834832] underline decoration-stone-300">
+                      {distinctionData.promptTone}
+                    </strong>
+                    ?
+                  </>
+                ) : (
+                  <>
+                    Which of the following words is most appropriate for:{' '}
+                    <strong className="text-[#834832] underline decoration-stone-300">
+                      {distinctionData.promptTone}
+                    </strong>
+                    ?
+                  </>
+                )}
               </p>
             </div>
 
@@ -780,7 +986,7 @@ export default function ReviewPage() {
                       {option}
                     </span>
                     <span className="text-[11px] font-sans text-[#78716c]">
-                      Option {idx + 1}
+                      {currentCard.language === 'es' ? `Opción ${idx + 1}` : `Option ${idx + 1}`}
                     </span>
                   </button>
                 );
@@ -811,15 +1017,32 @@ export default function ReviewPage() {
         {activeModality === 'ACT-03' && (
           <div className="space-y-6">
             <div className="space-y-2">
-              <span className="text-xs font-sans font-semibold uppercase tracking-wider text-[#a8a29e]">
-                Active Production Sandbox
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-sans font-semibold uppercase tracking-wider text-[#a8a29e]">
+                  {currentCard.language === 'es' ? 'Taller de Producción Activa' : 'Active Production Sandbox'}
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-sans font-bold uppercase tracking-wider bg-stone-100 text-stone-700">
+                  {currentCard.language === 'es' ? '🇪🇸 Español' : '🇬🇧 English'}
+                </span>
+              </div>
               <p className="text-sm font-sans text-[#57534e]">
-                Compose an original sentence deploying{' '}
-                <strong className="font-serif text-base text-[#1c1917] capitalize">
-                  "{currentCard.term}"
-                </strong>{' '}
-                accurately in formal or literary prose.
+                {currentCard.language === 'es' ? (
+                  <>
+                    Escribe una frase original en español desplegando{' '}
+                    <strong className="font-serif text-base text-[#1c1917] capitalize">
+                      "{currentCard.term}"
+                    </strong>{' '}
+                    con precisión formal o literaria.
+                  </>
+                ) : (
+                  <>
+                    Compose an original sentence deploying{' '}
+                    <strong className="font-serif text-base text-[#1c1917] capitalize">
+                      "{currentCard.term}"
+                    </strong>{' '}
+                    accurately in formal or literary prose.
+                  </>
+                )}
               </p>
             </div>
 
@@ -829,12 +1052,18 @@ export default function ReviewPage() {
                 rows={3}
                 value={productionSentence}
                 onChange={(e) => setProductionSentence(e.target.value)}
-                placeholder={`e.g. Write a rich clause using "${currentCard.term}"...`}
+                placeholder={
+                  currentCard.language === 'es'
+                    ? `Escribe una frase en español usando "${currentCard.term}"...`
+                    : `e.g. Write a rich clause using "${currentCard.term}"...`
+                }
                 className="w-full text-base font-serif p-3.5 rounded-xl border border-stone-300 focus:outline-none focus:ring-2 focus:ring-[#834832]"
               />
               <div className="flex items-center justify-between">
                 <span className="text-xs font-sans text-stone-500">
-                  {productionSentence.trim() ? `${productionSentence.trim().split(/\s+/).length} words` : '0 words'}
+                  {productionSentence.trim()
+                    ? `${productionSentence.trim().split(/\s+/).length} ${currentCard.language === 'es' ? 'palabras' : 'words'}`
+                    : `0 ${currentCard.language === 'es' ? 'palabras' : 'words'}`}
                 </span>
                 <button
                   type="button"
@@ -845,12 +1074,12 @@ export default function ReviewPage() {
                   {isVerifyingProduction ? (
                     <>
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Inspecting Syntax...</span>
+                      <span>{currentCard.language === 'es' ? 'Analizando sintaxis...' : 'Inspecting Syntax...'}</span>
                     </>
                   ) : (
                     <>
                       <Send className="w-3.5 h-3.5" />
-                      <span>Verify Usage</span>
+                      <span>{currentCard.language === 'es' ? 'Verificar uso' : 'Verify Usage'}</span>
                     </>
                   )}
                 </button>

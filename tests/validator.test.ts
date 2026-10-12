@@ -60,4 +60,70 @@ describe('Sentence Production Validator (ACT-03)', () => {
     expect(result.revisedSentence?.endsWith('.')).toBe(true);
     expect(result.revisedSentence?.[0]).toBe('T');
   });
+
+  describe('Spanish Sentence Validation (Subjuntivo, Ser vs Estar, Concordancia)', () => {
+    it('passes a well-formed literary Spanish sentence deploying target word', async () => {
+      const result = await validateProductionSentence(
+        'añoranza',
+        'La anciana marquesa sentía una profunda añoranza de su juventud en los salones vieneses.'
+      );
+
+      expect(result.evaluationStatus).toBe('pass');
+      expect(result.feedback).toBeDefined();
+      expect(result.registerDetected).toBeDefined();
+      expect(ProductionEvaluationSchema.safeParse(result).success).toBe(true);
+    });
+
+    it('recognizes Spanish verb inflections (e.g. preterite "sobrecogió" for target "sobrecoger")', async () => {
+      const result = await validateProductionSentence(
+        'sobrecoger',
+        'El silencio de la catedral gótica sobrecogió a todos los peregrinos.'
+      );
+
+      expect(result.evaluationStatus).toBe('pass');
+      expect(result.feedback).toBeDefined();
+    });
+
+    it('rejects indicative verb when "ojalá" requires subjunctive mood', async () => {
+      const result = await validateProductionSentence(
+        'ojalá',
+        'Ojalá llueve torrencialmente sobre los campos secos.'
+      );
+
+      expect(result.evaluationStatus).toBe('incorrect_usage');
+      expect(result.feedback).toContain('subjuntivo');
+      expect(result.revisedSentence).toContain('llueva');
+    });
+
+    it('passes when "ojalá" correctly triggers the subjunctive mood', async () => {
+      const result = await validateProductionSentence(
+        'ojalá',
+        'Ojalá llueva torrencialmente sobre los campos secos de la meseta.'
+      );
+
+      expect(result.evaluationStatus).toBe('pass');
+    });
+
+    it('detects gender agreement discordance for Spanish feminine noun (un añoranza)', async () => {
+      const result = await validateProductionSentence(
+        'añoranza',
+        'El escritor sintió un añoranza amarga por la tierra perdida.'
+      );
+
+      expect(result.evaluationStatus).toBe('incorrect_usage');
+      expect(result.feedback).toContain('femenino');
+      expect(result.revisedSentence).toContain('una añoranza');
+    });
+
+    it('flags ser vs estar mismatch for clinical condition with "desahuciado"', async () => {
+      const result = await validateProductionSentence(
+        'desahuciado',
+        'El enfermo es desahuciado por la gravedad de su condición terminal.'
+      );
+
+      expect(result.evaluationStatus).toBe('awkward');
+      expect(result.feedback).toContain('estar');
+      expect(result.revisedSentence).toContain('está desahuciado');
+    });
+  });
 });

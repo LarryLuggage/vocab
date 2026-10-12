@@ -202,4 +202,76 @@ describe('Lexis Hybrid Database & Repository Layer', () => {
       expect(logs[0].user_sentence).toContain('perspicacious');
     });
   });
+
+  describe('Spanish Language & Dual-Language Support', () => {
+    it('recognizes Spanish verb inflections and lemma derivatives', () => {
+      expect(areTermsVariants('sobrecogió', 'sobrecoger')).toBe(true);
+      expect(areTermsVariants('aconteció', 'acontecer')).toBe(true);
+      expect(areTermsVariants('desahuciada', 'desahuciado')).toBe(true);
+      expect(areTermsVariants('añoranzas', 'añoranza')).toBe(true);
+    });
+
+    it('filters cards by language in listCards', async () => {
+      const enCards = await listCards({ language: 'en' });
+      expect(enCards.length).toBe(5);
+
+      const esCardsInitial = await listCards({ language: 'es' });
+      expect(esCardsInitial.length).toBe(0);
+
+      // Create a Spanish card
+      await createCard({
+        term: 'añoranza',
+        language: 'es',
+        gender: 'feminine',
+        english_gloss: 'wistful yearning, nostalgia',
+        part_of_speech: 'noun',
+        primary_definition: 'Sentimiento de pena por una dicha ausente.',
+        etymology: { roots: [], cognates: [] },
+        collocations: ['profunda añoranza'],
+        source_context: { sentence: null, source: null },
+        cloze_sentences: ['Sentía {{c1::añoranza}}.'],
+        user_id: DEFAULT_USER_ID,
+      });
+
+      const esCardsAfter = await listCards({ language: 'es' });
+      expect(esCardsAfter.length).toBe(1);
+      expect(esCardsAfter[0].term).toBe('añoranza');
+      expect(esCardsAfter[0].language).toBe('es');
+      expect(esCardsAfter[0].gender).toBe('feminine');
+      expect(esCardsAfter[0].english_gloss).toBe('wistful yearning, nostalgia');
+    });
+
+    it('filters due cards queue by language', async () => {
+      const now = new Date();
+      const dueEn = await getDueCards(DEFAULT_USER_ID, now, 'en');
+      expect(dueEn.length).toBe(3);
+
+      const dueEs = await getDueCards(DEFAULT_USER_ID, now, 'es');
+      expect(dueEs.length).toBe(0);
+
+      // Create an overdue Spanish card
+      const pastTime = new Date(now.getTime() - 3600000).toISOString();
+      await createCard(
+        {
+          term: 'ojalá',
+          language: 'es',
+          part_of_speech: 'interjection',
+          primary_definition: 'Denota vivo deseo.',
+          etymology: { roots: [], cognates: [] },
+          collocations: ['ojalá llueva'],
+          source_context: { sentence: null, source: null },
+          cloze_sentences: ['{{c1::Ojalá}} fuera así.'],
+          user_id: DEFAULT_USER_ID,
+        },
+        {
+          due: pastTime,
+        }
+      );
+
+      const dueEsAfter = await getDueCards(DEFAULT_USER_ID, now, 'es');
+      expect(dueEsAfter.length).toBe(1);
+      expect(dueEsAfter[0].term).toBe('ojalá');
+      expect(dueEsAfter[0].language).toBe('es');
+    });
+  });
 });

@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const { term, contextSentence, source } = body;
+    const { term, contextSentence, source, language } = body;
 
     if (!term || typeof term !== 'string' || !term.trim()) {
       return NextResponse.json(
@@ -16,12 +16,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const payload = await enrichWord(term.trim(), contextSentence, source);
+    const payload = await enrichWord(term.trim(), contextSentence, source, language);
     const card = {
       id: `card-${payload.term.toLowerCase()}-${Date.now()}`,
       user_id: 'default-user',
       created_at: new Date().toISOString(),
       term: payload.term,
+      language: payload.language || language || 'en',
+      gender: payload.gender || null,
+      english_gloss: payload.english_gloss || null,
       part_of_speech: payload.part_of_speech,
       phonetic: payload.phonetic || null,
       primary_definition: payload.primary_definition,
@@ -39,7 +42,7 @@ export async function POST(req: NextRequest) {
       fallback_reason: payload.fallback_reason,
     };
 
-    return NextResponse.json({ success: true, data: payload, card }, { status: 200 });
+    return NextResponse.json({ success: true, data: { ...payload, language: (payload as any).language || language || 'en' }, card }, { status: 200 });
   } catch (error: any) {
     console.error('[API /api/enrich] Error:', error);
     return NextResponse.json(

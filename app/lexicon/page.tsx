@@ -22,11 +22,13 @@ import {
 import { CardWithSrs, FSRSState } from '@/types/lexis';
 import { apiFetch, errorMessageOf, CARDS_UPDATED_EVENT } from '@/lib/api-client';
 import { getCardStateLabel } from '@/lib/fsrs';
+import { formatGenderBadge } from '@/lib/language';
 import { cn } from '@/lib/utils';
 
 export default function LexiconPage() {
   const [cards, setCards] = useState<CardWithSrs[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedLanguage, setSelectedLanguage] = useState<'all' | 'en' | 'es'>('all');
   const [selectedTier, setSelectedTier] = useState<number | 'all'>('all');
   const [selectedOrigin, setSelectedOrigin] = useState<string | 'all'>('all');
   const [viewMode, setViewMode] = useState<'catalog' | 'roots'>('catalog');
@@ -59,6 +61,14 @@ export default function LexiconPage() {
     return () => window.removeEventListener(CARDS_UPDATED_EVENT, loadCards);
   }, []);
 
+  // Compute language counts
+  const languageCounts = useMemo(() => {
+    const allCount = cards.length;
+    const enCount = cards.filter((c) => (c.language || 'en') === 'en').length;
+    const esCount = cards.filter((c) => c.language === 'es').length;
+    return { allCount, enCount, esCount };
+  }, [cards]);
+
   // Compute stats
   const stats = useMemo(() => {
     const total = cards.length;
@@ -75,11 +85,18 @@ export default function LexiconPage() {
   // Filtered Cards
   const filteredCards = useMemo(() => {
     return cards.filter((card) => {
+      // Language filter
+      if (selectedLanguage !== 'all') {
+        const cardLang = card.language || 'en';
+        if (cardLang !== selectedLanguage) return false;
+      }
+
       // Search query filter
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
         const matchesTerm = card.term.toLowerCase().includes(q);
         const matchesDef = card.primary_definition.toLowerCase().includes(q);
+        const matchesGloss = card.english_gloss?.toLowerCase().includes(q) || false;
         const matchesNuance = card.nuance_note?.toLowerCase().includes(q) || false;
         const matchesCollocations = card.collocations.some((c) =>
           c.toLowerCase().includes(q)
@@ -90,7 +107,7 @@ export default function LexiconPage() {
             r.meaning.toLowerCase().includes(q) ||
             r.origin.toLowerCase().includes(q)
         );
-        if (!matchesTerm && !matchesDef && !matchesNuance && !matchesCollocations && !matchesRoots) {
+        if (!matchesTerm && !matchesDef && !matchesGloss && !matchesNuance && !matchesCollocations && !matchesRoots) {
           return false;
         }
       }
@@ -110,7 +127,7 @@ export default function LexiconPage() {
 
       return true;
     });
-  }, [cards, searchQuery, selectedTier, selectedOrigin]);
+  }, [cards, searchQuery, selectedLanguage, selectedTier, selectedOrigin]);
 
   // Grouping by root morphemes for "Morphological Roots" view
   const rootGroups = useMemo(() => {
@@ -323,6 +340,63 @@ export default function LexiconPage() {
 
       {/* Search & Filter Toolbar */}
       <div className="bg-white border border-[#e7e5e4] rounded-2xl p-4 shadow-sm space-y-4">
+        {/* Language Filter Tabs */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-100 pb-3">
+          <div className="flex items-center gap-1.5 p-1 rounded-xl bg-stone-100/80 border border-stone-200">
+            <button
+              type="button"
+              onClick={() => setSelectedLanguage('all')}
+              className={cn(
+                'px-3.5 py-1.5 rounded-lg text-xs font-sans font-semibold transition-all flex items-center gap-1.5',
+                selectedLanguage === 'all'
+                  ? 'bg-white text-[#834832] shadow-xs'
+                  : 'text-stone-600 hover:text-stone-900'
+              )}
+            >
+              <span>All</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-stone-200/70 text-stone-700">
+                {languageCounts.allCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSelectedLanguage('en')}
+              className={cn(
+                'px-3.5 py-1.5 rounded-lg text-xs font-sans font-semibold transition-all flex items-center gap-1.5',
+                selectedLanguage === 'en'
+                  ? 'bg-white text-[#834832] shadow-xs'
+                  : 'text-stone-600 hover:text-stone-900'
+              )}
+            >
+              <span>🇬🇧 English</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-stone-200/70 text-stone-700">
+                {languageCounts.enCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSelectedLanguage('es')}
+              className={cn(
+                'px-3.5 py-1.5 rounded-lg text-xs font-sans font-semibold transition-all flex items-center gap-1.5',
+                selectedLanguage === 'es'
+                  ? 'bg-white text-[#834832] shadow-xs'
+                  : 'text-stone-600 hover:text-stone-900'
+              )}
+            >
+              <span>🇪🇸 Español</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-stone-200/70 text-stone-700">
+                {languageCounts.esCount}
+              </span>
+            </button>
+          </div>
+
+          <span className="text-xs font-sans text-stone-500">
+            {filteredCards.length} {filteredCards.length === 1 ? 'word' : 'words'} shown
+          </span>
+        </div>
+
         <div className="flex flex-col sm:flex-row gap-3">
           {/* Instant Search Bar */}
           <div className="relative flex-1">
@@ -441,7 +515,7 @@ export default function LexiconPage() {
           {/* Language Origin Pills */}
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-stone-400 mr-1">Origin:</span>
-            {['all', 'Latin', 'Greek'].map((orig) => (
+            {['all', 'Latin', 'Greek', 'Árabe'].map((orig) => (
               <button
                 key={orig}
                 type="button"
@@ -474,7 +548,7 @@ export default function LexiconPage() {
               No words match your filters
             </h3>
             <p className="text-xs font-sans text-stone-500 max-w-sm mx-auto">
-              Try clearing your search query or adjusting the tier/origin filters to view cards.
+              Try clearing your search query or adjusting the tier/language/origin filters to view cards.
             </p>
           </div>
           <div className="pt-2 flex items-center justify-center gap-3">
@@ -482,6 +556,7 @@ export default function LexiconPage() {
               type="button"
               onClick={() => {
                 setSearchQuery('');
+                setSelectedLanguage('all');
                 setSelectedTier('all');
                 setSelectedOrigin('all');
               }}
@@ -512,7 +587,7 @@ export default function LexiconPage() {
                   {/* Card Header */}
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <div className="flex items-baseline gap-2.5">
+                      <div className="flex items-baseline gap-2 flex-wrap">
                         <h2 className="text-2xl font-serif font-bold text-[#1c1917] capitalize">
                           {card.term}
                         </h2>
@@ -521,10 +596,27 @@ export default function LexiconPage() {
                             {card.phonetic}
                           </span>
                         )}
+                        {/* Language indicator badge: 🇪🇸 ES or 🇬🇧 EN */}
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-sans font-bold uppercase tracking-wider bg-stone-100 text-stone-700 border border-stone-200">
+                          {(card.language || 'en') === 'es' ? '🇪🇸 ES' : '🇬🇧 EN'}
+                        </span>
+                        {/* Grammatical gender badge (el / la) on Spanish nouns */}
+                        {(card.language || 'en') === 'es' && card.gender && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-sans font-bold bg-amber-50 text-amber-900 border border-amber-300">
+                            {formatGenderBadge(card.gender, card.part_of_speech)?.article || card.gender}
+                          </span>
+                        )}
                       </div>
-                      <span className="inline-block mt-0.5 text-xs font-sans font-medium text-[#834832]">
-                        {card.part_of_speech}
-                      </span>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span className="inline-block text-xs font-sans font-medium text-[#834832]">
+                          {card.part_of_speech}
+                        </span>
+                        {(card.language || 'en') === 'es' && card.gender && (
+                          <span className="text-[11px] font-sans text-amber-800">
+                            • {formatGenderBadge(card.gender, card.part_of_speech)?.label}
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     <div className="flex items-center gap-1.5 flex-col items-end">
@@ -553,6 +645,16 @@ export default function LexiconPage() {
                   <p className="text-sm font-serif text-[#1c1917] leading-relaxed">
                     {card.primary_definition}
                   </p>
+
+                  {/* English Gloss Anchor alongside primary definition */}
+                  {card.english_gloss && (
+                    <div className="p-2.5 rounded-xl bg-[#f0f9ff] border border-[#bae6fd] text-xs font-serif text-[#0c4a6e] flex items-baseline gap-2">
+                      <span className="font-sans font-semibold text-[10px] uppercase tracking-wider text-[#0369a1] shrink-0">
+                        English Anchor:
+                      </span>
+                      <span className="italic font-medium">“{card.english_gloss}”</span>
+                    </div>
+                  )}
 
                   {/* Nuance Note */}
                   {card.nuance_note && (
@@ -645,9 +747,19 @@ export default function LexiconPage() {
                     className="p-3.5 rounded-xl border border-stone-200 bg-[#fdf8f6]/50 space-y-1.5"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-serif font-bold text-base text-[#1c1917] capitalize">
-                        {card.term}
-                      </span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-serif font-bold text-base text-[#1c1917] capitalize">
+                          {card.term}
+                        </span>
+                        <span className="text-[10px] font-sans px-1.5 py-0.5 rounded bg-stone-100 text-stone-700">
+                          {(card.language || 'en') === 'es' ? '🇪🇸' : '🇬🇧'}
+                        </span>
+                        {(card.language || 'en') === 'es' && card.gender && (
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-100 text-amber-900">
+                            {formatGenderBadge(card.gender, card.part_of_speech)?.article || card.gender}
+                          </span>
+                        )}
+                      </div>
                       <span className="text-[10px] font-sans px-2 py-0.5 rounded bg-stone-200/60 text-stone-700">
                         {card.part_of_speech}
                       </span>
@@ -655,6 +767,11 @@ export default function LexiconPage() {
                     <p className="text-xs font-serif text-stone-600 line-clamp-2">
                       {card.primary_definition}
                     </p>
+                    {card.english_gloss && (
+                      <p className="text-[11px] font-serif italic text-[#0369a1] line-clamp-1">
+                        Anchor: “{card.english_gloss}”
+                      </p>
+                    )}
                   </div>
                 ))}
               </div>

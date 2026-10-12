@@ -10,10 +10,12 @@ export async function GET(req: NextRequest) {
     const userId = searchParams.get('userId') || DEFAULT_USER_ID;
     const asOfParam = searchParams.get('asOf');
     const asOf = asOfParam ? new Date(asOfParam) : new Date();
+    const languageParam = searchParams.get('language') || undefined;
+    const language = languageParam && languageParam !== 'all' ? languageParam : undefined;
     const limit = searchParams.get('limit') ? parseInt(searchParams.get('limit')!, 10) : undefined;
     const includePreviews = searchParams.get('includePreviews') === 'true';
 
-    let dueCards = await getDueCards(userId, asOf);
+    let dueCards = await getDueCards(userId, asOf, language);
     if (limit) {
       dueCards = dueCards.slice(0, limit);
     }

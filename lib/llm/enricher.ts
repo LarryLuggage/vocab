@@ -10,7 +10,7 @@ import { CURATED_LEXICON } from './curated-lexicon';
 interface MorphemeEntry {
   morpheme: string;
   meaning: string;
-  origin: 'Latin' | 'Greek';
+  origin: 'Latin' | 'Greek' | 'Arabic' | 'Catalan' | 'Spanish' | string;
 }
 
 const COMMON_PREFIXES: MorphemeEntry[] = [
@@ -105,6 +105,140 @@ const COMMON_SUFFIXES: MorphemeEntry[] = [
   { morpheme: '-ize', meaning: 'to make / conform to', origin: 'Greek' },
   { morpheme: '-itude', meaning: 'condition / state of', origin: 'Latin' },
 ];
+
+// Spanish Morphological Knowledge Base (Arabic, Latin, Greek)
+export const SPANISH_PREFIXES: MorphemeEntry[] = [
+  { morpheme: 'al-', meaning: 'el / la (artículo determinado árabe)', origin: 'Arabic' },
+  { morpheme: 'des-', meaning: 'privación / negación / inversión', origin: 'Latin' },
+  { morpheme: 'in-', meaning: 'negación / privación', origin: 'Latin' },
+  { morpheme: 'im-', meaning: 'negación / privación', origin: 'Latin' },
+  { morpheme: 're-', meaning: 'repetición / intensificación', origin: 'Latin' },
+  { morpheme: 'sobre-', meaning: 'por encima de / exceso (super)', origin: 'Latin' },
+  { morpheme: 'ante-', meaning: 'delante / anterioridad', origin: 'Latin' },
+  { morpheme: 'contra-', meaning: 'oposición / pugna', origin: 'Latin' },
+  { morpheme: 'inter-', meaning: 'entre / recíproco', origin: 'Latin' },
+  { morpheme: 'sub-', meaning: 'debajo de / inferioridad', origin: 'Latin' },
+  { morpheme: 'trans-', meaning: 'al otro lado / a través', origin: 'Latin' },
+  { morpheme: 'tras-', meaning: 'detrás / a través', origin: 'Latin' },
+  { morpheme: 'pre-', meaning: 'anterioridad / antes de', origin: 'Latin' },
+  { morpheme: 'pos-', meaning: 'posterioridad / después de', origin: 'Latin' },
+  { morpheme: 'auto-', meaning: 'uno mismo / propio', origin: 'Greek' },
+  { morpheme: 'a-', meaning: 'aproximación / dirección (ad)', origin: 'Latin' },
+];
+
+export const SPANISH_SUFFIXES: MorphemeEntry[] = [
+  { morpheme: '-ción', meaning: 'acción y efecto', origin: 'Latin' },
+  { morpheme: '-cion', meaning: 'acción y efecto', origin: 'Latin' },
+  { morpheme: '-sión', meaning: 'acción y efecto', origin: 'Latin' },
+  { morpheme: '-sion', meaning: 'acción y efecto', origin: 'Latin' },
+  { morpheme: '-ecer', meaning: 'incoativo / proceso de llegar a ser', origin: 'Latin' },
+  { morpheme: '-miento', meaning: 'acción o resultado del verbo', origin: 'Latin' },
+  { morpheme: '-anza', meaning: 'cualidad o acción continuada', origin: 'Latin' },
+  { morpheme: '-eza', meaning: 'cualidad abstracta', origin: 'Latin' },
+  { morpheme: '-idad', meaning: 'cualidad o condición de ser', origin: 'Latin' },
+  { morpheme: '-ado', meaning: 'participio pasivo / que ha recibido la acción', origin: 'Latin' },
+  { morpheme: '-ada', meaning: 'participio pasivo / cualidad alcanzada', origin: 'Latin' },
+  { morpheme: '-ido', meaning: 'participio / efecto de acción', origin: 'Latin' },
+  { morpheme: '-ida', meaning: 'participio / efecto de acción', origin: 'Latin' },
+  { morpheme: '-oso', meaning: 'abundancia o inclinación', origin: 'Latin' },
+  { morpheme: '-osa', meaning: 'abundancia o inclinación', origin: 'Latin' },
+  { morpheme: '-mente', meaning: 'de modo o manera', origin: 'Latin' },
+  { morpheme: '-ivo', meaning: 'inclinación o capacidad activa', origin: 'Latin' },
+  { morpheme: '-iva', meaning: 'inclinación o capacidad activa', origin: 'Latin' },
+  { morpheme: '-al', meaning: 'relativo o perteneciente a', origin: 'Latin' },
+  { morpheme: '-ar', meaning: 'infinitivo verbal / relativo a', origin: 'Latin' },
+  { morpheme: '-er', meaning: 'infinitivo verbal', origin: 'Latin' },
+  { morpheme: '-ir', meaning: 'infinitivo verbal', origin: 'Latin' },
+];
+
+// ============================================================================
+// Language Detection (English vs Spanish)
+// ============================================================================
+export function detectLanguage(term: string, contextSentence?: string): 'en' | 'es' {
+  const cleanTerm = term.trim().toLowerCase();
+
+  // 1. Check curated lexicon first
+  if (CURATED_LEXICON[cleanTerm]) {
+    return (CURATED_LEXICON[cleanTerm].language as 'en' | 'es') || 'en';
+  }
+
+  // 2. Diacritics check on term: Spanish specific marks (ñ, á, é, í, ó, ú, ü, ¿, ¡)
+  const spanishDiacritics = /[ñáéíóúü¿¡]/i;
+  if (spanishDiacritics.test(cleanTerm)) {
+    return 'es';
+  }
+
+  // 3. Spanish inverted punctuation or diacritics in context sentence
+  if (contextSentence) {
+    if (/[¿¡]/.test(contextSentence)) {
+      return 'es';
+    }
+    const diacriticMatches = contextSentence.match(/[ñáéíóúü]/gi);
+    if (diacriticMatches && diacriticMatches.length >= 1) {
+      return 'es';
+    }
+  }
+
+  // 4. Token-based stop word / lemma detection in context sentence
+  if (contextSentence) {
+    const spanishStopWords = new Set([
+      'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas', 'de', 'del',
+      'al', 'en', 'y', 'o', 'que', 'para', 'por', 'con', 'como', 'se',
+      'su', 'sus', 'pero', 'mas', 'más', 'no', 'si', 'sí', 'este', 'esta',
+      'estos', 'estas', 'ese', 'esa', 'esos', 'esas', 'aquel', 'aquella',
+      'ser', 'estar', 'haber', 'tener', 'hacer', 'fue', 'era', 'habia',
+      'había', 'sido', 'muy', 'sobre', 'entre', 'tras', 'sin', 'cuando',
+      'donde', 'dónde', 'quien', 'quién', 'cual', 'cuál', 'lo', 'le', 'les',
+      'me', 'te', 'nos'
+    ]);
+    const englishStopWords = new Set([
+      'the', 'a', 'an', 'and', 'or', 'of', 'in', 'to', 'for', 'with',
+      'on', 'at', 'by', 'from', 'is', 'was', 'are', 'were', 'be', 'been',
+      'being', 'have', 'has', 'had', 'that', 'this', 'these', 'those', 'it',
+      'its', 'as', 'he', 'she', 'they', 'we', 'i', 'you'
+    ]);
+
+    const words = contextSentence
+      .toLowerCase()
+      .replace(/[^a-záéíóúüñ]/gi, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
+
+    let esCount = 0;
+    let enCount = 0;
+    for (const w of words) {
+      if (spanishStopWords.has(w)) esCount++;
+      if (englishStopWords.has(w)) enCount++;
+    }
+
+    if (esCount >= 2 && esCount > enCount) {
+      return 'es';
+    }
+  }
+
+  // 5. Morphological clues in term for Spanish
+  // Arabic al- prefix followed by at least 3 letters (e.g. alcázar, alféizar, aljibe, almohada, alquimia)
+  if (/^al[b-df-hj-np-tv-z][a-záéíóúüñ]{3,}/i.test(cleanTerm)) {
+    return 'es';
+  }
+
+  // Common Spanish-specific verb/noun endings
+  if (
+    cleanTerm.endsWith('ecer') ||
+    cleanTerm.endsWith('cion') ||
+    cleanTerm.endsWith('ción') ||
+    cleanTerm.endsWith('miento') ||
+    cleanTerm.endsWith('ieron') ||
+    cleanTerm.endsWith('aron') ||
+    cleanTerm.endsWith('aban') ||
+    cleanTerm.endsWith('ando') ||
+    cleanTerm.endsWith('iendo')
+  ) {
+    return 'es';
+  }
+
+  return 'en';
+}
 
 // ============================================================================
 // Helper Utilities: API Key Detection & Robust JSON Extraction
@@ -207,13 +341,18 @@ export async function fetchDictionaryFallback(term: string): Promise<DictionaryA
 // ============================================================================
 // Built-in Intelligent Fallback Lexical Synthesizer
 // ============================================================================
+// ============================================================================
+// Built-in Intelligent Fallback Lexical Synthesizer
+// ============================================================================
 export function synthesizeLexicalFallback(
   rawTerm: string,
   contextSentence?: string,
   source?: string,
-  dictData?: DictionaryApiResponse | null
+  dictData?: DictionaryApiResponse | null,
+  languageOverride?: 'en' | 'es'
 ): LexicalEnrichmentPayload {
   const term = rawTerm.trim().toLowerCase();
+  const lang = languageOverride || detectLanguage(rawTerm, contextSentence);
 
   // 1. Check curated high-register database
   if (CURATED_LEXICON[term]) {
@@ -231,7 +370,7 @@ export function synthesizeLexicalFallback(
         source: source?.trim() || 'User Ingestion',
       };
       // Mask context sentence for cloze
-      const regex = new RegExp(`\\b${escapeRegExp(term)}[a-z]*\\b`, 'i');
+      const regex = new RegExp(`\\b${escapeRegExp(term)}[a-záéíóúüñ]*\\b`, 'i');
       if (regex.test(contextSentence)) {
         const masked = contextSentence.replace(regex, (match) => `{{c1::${match}}}`);
         clozeSentences.unshift(masked);
@@ -241,6 +380,9 @@ export function synthesizeLexicalFallback(
     return LexicalEnrichmentSchema.parse({
       term: rawTerm.trim(),
       ...curated,
+      language: curated.language || lang,
+      gender: curated.gender || null,
+      english_gloss: curated.english_gloss || null,
       source_context: sourceContext,
       cloze_sentences: clozeSentences,
       is_fallback: false,
@@ -248,7 +390,177 @@ export function synthesizeLexicalFallback(
     });
   }
 
-  // 2. Algorithmic morphological analysis
+  // 2. Spanish morphological synthesis
+  if (lang === 'es') {
+    const identifiedRoots: { morpheme: string; meaning: string; origin: string }[] = [];
+    const identifiedCognates: string[] = [];
+
+    // Match Spanish prefixes (Arabic al-, Latin des-, sobre-, etc.)
+    for (const p of SPANISH_PREFIXES) {
+      const rawPrefix = p.morpheme.replace('-', '');
+      if (term.startsWith(rawPrefix) && term.length > rawPrefix.length + 2) {
+        identifiedRoots.push(p);
+        break;
+      }
+    }
+
+    // Match root stems if present
+    for (const r of COMMON_ROOTS) {
+      if (term.includes(r.morpheme) && term.length >= r.morpheme.length) {
+        identifiedRoots.push(r);
+        identifiedCognates.push(`${r.morpheme}ico`, `${r.morpheme}ación`);
+        break;
+      }
+    }
+
+    // Infer Spanish Part of Speech from suffixes
+    let partOfSpeech = 'noun';
+    if (term.endsWith('mente')) {
+      partOfSpeech = 'adverb';
+    } else if (
+      term.endsWith('ar') ||
+      term.endsWith('er') ||
+      term.endsWith('ir') ||
+      term.endsWith('ecer') ||
+      term.endsWith('izar')
+    ) {
+      partOfSpeech = 'verb';
+    } else if (
+      term.endsWith('oso') ||
+      term.endsWith('osa') ||
+      term.endsWith('ado') ||
+      term.endsWith('ada') ||
+      term.endsWith('ido') ||
+      term.endsWith('ida') ||
+      term.endsWith('ivo') ||
+      term.endsWith('iva') ||
+      term.endsWith('able') ||
+      term.endsWith('ible') ||
+      term.endsWith('al')
+    ) {
+      partOfSpeech = 'adjective';
+    } else if (
+      term.endsWith('ción') ||
+      term.endsWith('cion') ||
+      term.endsWith('sión') ||
+      term.endsWith('sion') ||
+      term.endsWith('miento') ||
+      term.endsWith('anza') ||
+      term.endsWith('eza') ||
+      term.endsWith('idad') ||
+      term.endsWith('ismo') ||
+      term.endsWith('ista')
+    ) {
+      partOfSpeech = 'noun';
+    }
+
+    for (const s of SPANISH_SUFFIXES) {
+      const rawSuffix = s.morpheme.replace('-', '');
+      if (term.endsWith(rawSuffix) && term.length > rawSuffix.length + 2) {
+        identifiedRoots.push(s);
+        break;
+      }
+    }
+
+    if (identifiedRoots.length === 0) {
+      identifiedRoots.push({
+        morpheme: term.slice(0, Math.min(5, term.length)),
+        meaning: 'raíz léxica',
+        origin: 'Latin / Greek / Arabic',
+      });
+    }
+
+    // Infer grammatical gender for nouns
+    let gender: 'masculine' | 'feminine' | null = null;
+    if (partOfSpeech === 'noun') {
+      if (
+        term.endsWith('a') ||
+        term.endsWith('ción') ||
+        term.endsWith('cion') ||
+        term.endsWith('sión') ||
+        term.endsWith('sion') ||
+        term.endsWith('dad') ||
+        term.endsWith('tad') ||
+        term.endsWith('tud') ||
+        term.endsWith('anza') ||
+        term.endsWith('eza')
+      ) {
+        gender = 'feminine';
+      } else if (
+        term.endsWith('o') ||
+        term.endsWith('or') ||
+        term.endsWith('ón') ||
+        term.endsWith('on') ||
+        term.endsWith('aje') ||
+        term.endsWith('miento')
+      ) {
+        gender = 'masculine';
+      }
+    }
+
+    const capitalizedTerm = rawTerm.charAt(0).toUpperCase() + rawTerm.slice(1);
+    const rootSummary = identifiedRoots.map((r) => `${r.morpheme} (${r.meaning}, ${r.origin})`).join(', ');
+
+    const primaryDefinition = `Término literario o culto de la lengua española (${partOfSpeech}) derivado de ${rootSummary}.`;
+    const nuanceNote = `Generado por el sintetizador léxico morfológico para español culto. Raíces: ${rootSummary}.`;
+    const englishGloss = `${capitalizedTerm} (Spanish literary ${partOfSpeech})`;
+
+    const clozeSentences: string[] = [];
+    if (contextSentence && contextSentence.trim()) {
+      const regex = new RegExp(`\\b${escapeRegExp(term)}[a-záéíóúüñ]*\\b`, 'i');
+      if (regex.test(contextSentence)) {
+        clozeSentences.push(contextSentence.replace(regex, (match) => `{{c1::${match}}}`));
+      } else {
+        clozeSentences.push(`El texto clásico desplegó el término {{c1::${term}}} con singular precisión.`);
+      }
+    } else {
+      clozeSentences.push(
+        `La prosa del autor evocaba {{c1::${term}}} en el pasaje culminante.`,
+        `El ensayo crítico examinó el alcance de {{c1::${term}}} en la literatura castellana.`
+      );
+    }
+
+    const distinctionMatrix = {
+      synonyms: [term, `${term} (equivalente)`],
+      nuanceComparison: `${capitalizedTerm} denota elevación estilística y precisión en la prosa culta española.`,
+      contextRecommendations: [
+        {
+          word: term,
+          recommendedRegister: 'Prosa literaria culta',
+          exampleSentence: `Un uso magistral de ${term} en la literatura contemporánea.`,
+        },
+      ],
+    };
+
+    const payload: LexicalEnrichmentPayload = {
+      term: rawTerm.trim(),
+      language: 'es',
+      gender,
+      english_gloss: englishGloss,
+      part_of_speech: partOfSpeech,
+      phonetic: `/${term}/`,
+      primary_definition: primaryDefinition,
+      nuance_note: nuanceNote,
+      etymology: {
+        roots: identifiedRoots,
+        cognates: identifiedCognates.length > 0 ? identifiedCognates : [`${term}idad`],
+      },
+      collocations: [`${term} literario`, `uso de ${term}`, `${term} en prosa`],
+      source_context: {
+        sentence: contextSentence?.trim() || null,
+        source: source?.trim() || null,
+      },
+      cloze_sentences: clozeSentences,
+      distinction_matrix: distinctionMatrix,
+      is_fallback: true,
+      enrichment_source: 'offline-heuristic',
+      fallback_reason: 'AI service offline / fallback mode (Spanish morphological analysis)',
+    };
+
+    return LexicalEnrichmentSchema.parse(payload);
+  }
+
+  // 3. Algorithmic morphological analysis for English
   const identifiedRoots: { morpheme: string; meaning: string; origin: string }[] = [];
   const identifiedCognates: string[] = [];
 
@@ -374,6 +686,9 @@ export function synthesizeLexicalFallback(
 
   const payload: LexicalEnrichmentPayload = {
     term: rawTerm.trim(),
+    language: 'en',
+    gender: null,
+    english_gloss: null,
     part_of_speech: partOfSpeech,
     phonetic: dictData?.phonetic || `/${term}/`,
     primary_definition: primaryDefinition,
@@ -397,6 +712,8 @@ export function synthesizeLexicalFallback(
   return LexicalEnrichmentSchema.parse(payload);
 }
 
+export const fallbackEnrichWord = synthesizeLexicalFallback;
+
 // ============================================================================
 // Google Gemini API Ingestion & Defensive Normalizer
 // ============================================================================
@@ -405,6 +722,9 @@ export const GEMINI_RESPONSE_SCHEMA = {
   type: 'OBJECT',
   properties: {
     term: { type: 'STRING' },
+    language: { type: 'STRING' },
+    gender: { type: 'STRING' },
+    english_gloss: { type: 'STRING' },
     part_of_speech: { type: 'STRING' },
     phonetic: { type: 'STRING' },
     primary_definition: { type: 'STRING' },
@@ -463,12 +783,32 @@ export const GEMINI_RESPONSE_SCHEMA = {
   ],
 };
 
-export function normalizeLexicalPayload(raw: any, targetTerm: string): LexicalEnrichmentPayload {
+export function normalizeLexicalPayload(
+  raw: any,
+  targetTerm: string,
+  detectedLang?: 'en' | 'es'
+): LexicalEnrichmentPayload {
   if (!raw || typeof raw !== 'object') {
     throw new Error('Raw enrichment data is not an object');
   }
 
   const term = (raw.term && typeof raw.term === 'string' && raw.term.trim()) || targetTerm.trim();
+  const language: 'en' | 'es' =
+    raw.language === 'es' || raw.language === 'en'
+      ? raw.language
+      : detectedLang || detectLanguage(term, raw.source_context?.sentence);
+
+  let gender: 'masculine' | 'feminine' | 'neuter' | null = null;
+  if (raw.gender === 'masculine' || raw.gender === 'feminine' || raw.gender === 'neuter') {
+    gender = raw.gender;
+  }
+
+  const english_gloss =
+    raw.english_gloss ||
+    raw.englishGloss ||
+    raw.gloss ||
+    null;
+
   const part_of_speech =
     raw.part_of_speech ||
     raw.partOfSpeech ||
@@ -526,7 +866,7 @@ export function normalizeLexicalPayload(raw: any, targetTerm: string): LexicalEn
     // Ensure at least one cloze has the {{c1::...}} mask
     cloze_sentences = cloze_sentences.map((s: string) => {
       if (!s.includes('{{c1::')) {
-        const regex = new RegExp(`\\b${escapeRegExp(term)}[a-z]*\\b`, 'i');
+        const regex = new RegExp(`\\b${escapeRegExp(term)}[a-záéíóúüñ]*\\b`, 'i');
         if (regex.test(s)) {
           return s.replace(regex, (m) => `{{c1::${m}}}`);
         }
@@ -590,6 +930,9 @@ export function normalizeLexicalPayload(raw: any, targetTerm: string): LexicalEn
 
   const payload: LexicalEnrichmentPayload = {
     term,
+    language,
+    gender,
+    english_gloss: english_gloss ? String(english_gloss) : null,
     part_of_speech: String(part_of_speech),
     phonetic: phonetic ? String(phonetic) : null,
     primary_definition: String(primary_definition),
@@ -620,7 +963,8 @@ export interface GeminiEnrichmentResponse {
 export async function fetchGeminiEnrichment(
   term: string,
   contextSentence?: string,
-  source?: string
+  source?: string,
+  languageOverride?: 'en' | 'es'
 ): Promise<GeminiEnrichmentResponse> {
   const apiKey = getGeminiApiKey();
   if (!apiKey) {
@@ -630,7 +974,24 @@ export async function fetchGeminiEnrichment(
     };
   }
 
-  const prompt = `You are a world-class lexicographer and etymologist. Analyze the target vocabulary word "${term}".
+  const lang = languageOverride || detectLanguage(term, contextSentence);
+
+  const prompt =
+    lang === 'es'
+      ? `You are a world-class lexicographer and philologist specialized in the Royal Spanish Academy (Real Academia Española - RAE) and high-register Hispanic literature.
+Analyze the target Spanish vocabulary term: "${term}".
+${contextSentence ? `Context sentence provided by user: "${contextSentence}"` : ''}
+${source ? `Source: "${source}"` : ''}
+
+Crucial Spanish linguistic guidelines:
+1. Infinitive Lemma: If "${term}" is a conjugated verb (e.g. "sobrecogió"), extract the infinitive lemma as the term ("sobrecoger"), while preserving the user's sentence in source_context.
+2. Grammatical Gender: If the word is a noun, identify grammatical gender as "masculine" or "feminine" (null for verbs/adjectives/adverbs unless used substantively).
+3. Primary Definition & Gloss: Output a monolingual RAE-style Spanish definition for primary_definition, and provide a concise 1-sentence English translation anchor in english_gloss.
+4. Etymology: Identify Arabic (e.g. Andalusi Arabic), Latin, or Greek root morphemes and historical origins.
+5. Nuance & Falsos Amigos: In nuance_note, capture register, literary connotations, and highlight False Friends (falsos amigos) with English when relevant.
+6. Collocations & Cloze: Provide high-register Spanish collocations, 2 cloze sentences in literary Spanish (with {{c1::...}} masked), and a distinction matrix comparing 3 near-synonyms in literary Spanish.
+7. Language: Set language to "es".`
+      : `You are a world-class lexicographer and etymologist. Analyze the target vocabulary word "${term}".
 ${contextSentence ? `Context sentence provided by user: "${contextSentence}"` : ''}
 ${source ? `Source: "${source}"` : ''}
 
@@ -698,6 +1059,7 @@ Provide a deep etymological breakdown (morphemes, Greek/Latin origins), connotat
         const normalized = normalizeLexicalPayload(
           {
             ...parsedJson,
+            language: parsedJson.language || lang,
             source_context: {
               sentence: contextSentence?.trim() || parsedJson.source_context?.sentence || null,
               source: source?.trim() || parsedJson.source_context?.source || null,
@@ -705,7 +1067,8 @@ Provide a deep etymological breakdown (morphemes, Greek/Latin origins), connotat
             is_fallback: false,
             enrichment_source: 'gemini',
           },
-          term
+          parsedJson.term || term,
+          lang
         );
 
         return {
@@ -836,17 +1199,19 @@ Include term, part_of_speech, phonetic, primary_definition, nuance_note, etymolo
 export async function enrichWord(
   term: string,
   contextSentence?: string,
-  source?: string
+  source?: string,
+  languageOverride?: 'en' | 'es'
 ): Promise<LexicalEnrichmentPayload> {
   const trimmed = term.trim();
   if (!trimmed) {
     throw new Error('Term cannot be empty');
   }
 
+  const lang = languageOverride || detectLanguage(trimmed, contextSentence);
   let failureReason: string | undefined;
 
   // 1. Try Gemini
-  const geminiRes = await fetchGeminiEnrichment(trimmed, contextSentence, source);
+  const geminiRes = await fetchGeminiEnrichment(trimmed, contextSentence, source, lang);
   if (geminiRes.payload) {
     return geminiRes.payload;
   }
@@ -854,15 +1219,20 @@ export async function enrichWord(
     failureReason = `Gemini: ${geminiRes.error}`;
   }
 
-  // 2. Try OpenAI
-  const openAiResult = await fetchOpenAIEnrichment(trimmed, contextSentence, source);
-  if (openAiResult) return openAiResult;
+  // 2. Try OpenAI (only for English)
+  if (lang === 'en') {
+    const openAiResult = await fetchOpenAIEnrichment(trimmed, contextSentence, source);
+    if (openAiResult) return openAiResult;
+  }
 
-  // 3. Try Public Dictionary API for real definition
-  const dictData = await fetchDictionaryFallback(trimmed);
+  // 3. Try Public Dictionary API for real definition (English only)
+  let dictData: DictionaryApiResponse | null = null;
+  if (lang === 'en') {
+    dictData = await fetchDictionaryFallback(trimmed);
+  }
 
   // 4. Fall back to intelligent lexical synthesizer (with verified dictionary data if available)
-  const fallback = synthesizeLexicalFallback(trimmed, contextSentence, source, dictData);
+  const fallback = synthesizeLexicalFallback(trimmed, contextSentence, source, dictData, lang);
   if (failureReason) {
     fallback.fallback_reason = failureReason;
   }

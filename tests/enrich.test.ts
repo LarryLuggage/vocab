@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { LexicalEnrichmentSchema } from '@/lib/llm/schema';
 import {
   enrichWord,
+  detectLanguage,
   synthesizeLexicalFallback,
+  fallbackEnrichWord,
   extractJsonFromText,
   getGeminiApiKey,
   normalizeLexicalPayload,
@@ -193,6 +195,112 @@ describe('Lexical Schema & Enrichment Engine (ING-02)', () => {
       expect(normalized.part_of_speech).toBe('noun'); // default
       expect(normalized.cloze_sentences.length).toBeGreaterThan(0);
       expect(LexicalEnrichmentSchema.safeParse(normalized).success).toBe(true);
+    });
+
+    it('parses Spanish language, gender, and english_gloss', () => {
+      const spanishRaw = {
+        term: 'añoranza',
+        language: 'es',
+        gender: 'feminine',
+        english_gloss: 'wistful yearning, nostalgia',
+        part_of_speech: 'noun',
+        primary_definition: 'Sentimiento de pena o melancolía por una ausencia.',
+        nuance_note: 'Registro lírico.',
+        etymology: {
+          roots: [{ morpheme: 'gnorare', meaning: 'conocer', origin: 'Latin' }],
+          cognates: ['añorar'],
+        },
+        collocations: ['profunda añoranza'],
+        cloze_sentences: ['Sentía una gran {{c1::añoranza}}.'],
+        distinction_matrix: {
+          synonyms: ['añoranza', 'nostalgia'],
+          nuanceComparison: 'Añoranza es más íntima y punzante.',
+          contextRecommendations: [
+            { word: 'añoranza', recommendedRegister: 'Lírico', exampleSentence: 'Dulce añoranza.' },
+          ],
+        },
+      };
+
+      const normalized = normalizeLexicalPayload(spanishRaw, 'añoranza');
+      expect(normalized.language).toBe('es');
+      expect(normalized.gender).toBe('feminine');
+      expect(normalized.english_gloss).toBe('wistful yearning, nostalgia');
+      expect(normalized.part_of_speech).toBe('noun');
+      expect(LexicalEnrichmentSchema.safeParse(normalized).success).toBe(true);
+    });
+  });
+
+  describe('Bilingual Spanish Lexicon & Detection', () => {
+    it('accurately detects language for English and Spanish words and contexts', () => {
+      expect(detectLanguage('ojalá')).toBe('es');
+      expect(detectLanguage('añoranza')).toBe('es');
+      expect(detectLanguage('desahuciado')).toBe('es');
+      expect(detectLanguage('acontecer')).toBe('es');
+      expect(detectLanguage('sobrecoger')).toBe('es');
+      expect(detectLanguage('sobrecogió', 'El silencio sobrecogió a toda la aldea')).toBe('es');
+      expect(detectLanguage('perspicacious')).toBe('en');
+      expect(detectLanguage('solipsism')).toBe('en');
+    });
+
+    it('enriches curated Spanish terms with RAE definition, Arabic/Latin morphemes, gender, and gloss', async () => {
+      // 1. ojalá (Arabic origin)
+      const ojala = await enrichWord('ojalá');
+      expect(ojala.language).toBe('es');
+      expect(ojala.english_gloss).toBeDefined();
+      expect(ojala.primary_definition).toContain('subjuntivo');
+      expect(ojala.etymology.roots.some((r) => r.origin.toLowerCase().includes('arabic'))).toBe(true);
+      expect(ojala.cloze_sentences.some((s) => s.includes('ojalá'))).toBe(true);
+
+      // 2. añoranza (Feminine noun, Latin notus/gnorare)
+      const anoranza = await enrichWord('añoranza');
+      expect(anoranza.language).toBe('es');
+      expect(anoranza.gender).toBe('feminine');
+      expect(anoranza.english_gloss).toBeDefined();
+      expect(anoranza.etymology.roots.some((r) => r.morpheme.includes('gnorare') || r.morpheme.includes('notus'))).toBe(true);
+      expect(anoranza.distinction_matrix?.synonyms).toContain('añoranza');
+      expect(anoranza.distinction_matrix?.synonyms).toContain('nostalgia');
+
+      // 3. desahuciado (Masculine adjective, Latin roots)
+      const desahuciado = await enrichWord('desahuciado');
+      expect(desahuciado.language).toBe('es');
+      expect(desahuciado.gender).toBe('masculine');
+      expect(desahuciado.english_gloss).toBeDefined();
+      expect(desahuciado.distinction_matrix?.synonyms).toContain('desahuciado');
+      expect(desahuciado.distinction_matrix?.synonyms).toContain('moribundo');
+
+      // 4. acontecer (Verb, Latin roots)
+      const acontecer = await enrichWord('acontecer');
+      expect(acontecer.language).toBe('es');
+      expect(acontecer.part_of_speech).toBe('verb');
+      expect(acontecer.english_gloss).toBeDefined();
+
+      // 5. sobrecoger (Verb)
+      const sobrecoger = await enrichWord('sobrecoger');
+      expect(sobrecoger.language).toBe('es');
+      expect(sobrecoger.part_of_speech).toBe('verb');
+    });
+
+    it('synthesizes novel uncurated Spanish terms using Spanish morphological rules (Arabic al-, suffixes)', () => {
+      // Arabic prefix al-
+      const aljibe = fallbackEnrichWord('aljibe');
+      expect(aljibe.language).toBe('es');
+      expect(aljibe.etymology.roots[0].origin).toBe('Arabic');
+      expect(aljibe.is_fallback).toBe(true);
+      expect(aljibe.english_gloss).toBeDefined();
+      expect(LexicalEnrichmentSchema.safeParse(aljibe).success).toBe(true);
+
+      // Verb ending in -ecer
+      const favorecer = fallbackEnrichWord('favorecer');
+      expect(favorecer.language).toBe('es');
+      expect(favorecer.part_of_speech).toBe('verb');
+      expect(favorecer.etymology.roots.some((r) => r.morpheme === '-ecer')).toBe(true);
+
+      // Feminine noun ending in -ción
+      const abnegacion = fallbackEnrichWord('abnegación');
+      expect(abnegacion.language).toBe('es');
+      expect(abnegacion.part_of_speech).toBe('noun');
+      expect(abnegacion.gender).toBe('feminine');
+      expect(abnegacion.etymology.roots.some((r) => r.morpheme === '-ción')).toBe(true);
     });
   });
 });

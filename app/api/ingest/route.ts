@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 2. Enrich via LLM
-    const enriched = await enrichWord(cleanTerm, contextSentence, source);
+    const enriched = await enrichWord(cleanTerm, contextSentence, source, body.language);
 
     // 3. Assemble SourceContext
     const fullSourceTitle = [source, author, page].filter(Boolean).join(' • ');
@@ -81,6 +81,9 @@ export async function POST(req: NextRequest) {
     const newCardData: Omit<VocabCard, 'id' | 'created_at'> = {
       user_id: DEFAULT_USER_ID,
       term: enriched.term || cleanTerm,
+      language: body.language || enriched.language || 'en',
+      gender: enriched.gender || null,
+      english_gloss: enriched.english_gloss || null,
       part_of_speech: enriched.part_of_speech,
       phonetic: enriched.phonetic || null,
       primary_definition: enriched.primary_definition,

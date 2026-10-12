@@ -19,6 +19,7 @@ export interface SourceContext {
 
 export interface IngestRequestPayload {
   term: string;
+  language?: 'en' | 'es';
   contextSentence?: string;
   source?: string;
   author?: string;
@@ -42,6 +43,9 @@ export interface VocabCard {
   id: string;
   user_id: string;
   term: string;
+  language?: 'en' | 'es';
+  gender?: 'masculine' | 'feminine' | 'neuter' | null;
+  english_gloss?: string | null;
   part_of_speech: string;
   phonetic?: string | null;
   primary_definition: string;

@@ -16,11 +16,13 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const search = searchParams.get('search') || undefined;
     const pos = searchParams.get('pos') || undefined;
+    const languageParam = searchParams.get('language') || undefined;
+    const language = languageParam && languageParam !== 'all' ? languageParam : undefined;
     const userId = searchParams.get('userId') || DEFAULT_USER_ID;
     const limit = searchParams.get('limit') ? parseInt(searchParams.get('limit')!, 10) : undefined;
     const offset = searchParams.get('offset') ? parseInt(searchParams.get('offset')!, 10) : undefined;
 
-    const cards = await listCards({ search, pos, userId, limit, offset });
+    const cards = await listCards({ search, pos, language, userId, limit, offset });
     return NextResponse.json({ success: true, count: cards.length, data: cards }, { status: 200 });
   } catch (error: any) {
     console.error('[API GET /api/cards] Error:', error);
@@ -34,7 +36,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const { term, force, appendContext, userId = DEFAULT_USER_ID, ...rest } = body;
+    const { term, force, appendContext, userId = DEFAULT_USER_ID, language, ...rest } = body;
 
     if (!term || typeof term !== 'string' || !term.trim()) {
       return NextResponse.json(
@@ -44,6 +46,7 @@ export async function POST(req: NextRequest) {
     }
 
     const cleanTerm = term.trim();
+    const targetLang = language || rest.language;
 
     // 1. Variant / Lemma Deduplication Check (ING-04)
     const existing = await findCardByTerm(cleanTerm, userId);
@@ -90,6 +93,9 @@ export async function POST(req: NextRequest) {
     if (rest.primary_definition && rest.part_of_speech) {
       cardData = {
         term: cleanTerm,
+        language: targetLang || 'en',
+        gender: rest.gender || null,
+        english_gloss: rest.english_gloss || null,
         part_of_speech: rest.part_of_speech,
         phonetic: rest.phonetic || null,
         primary_definition: rest.primary_definition,
@@ -112,10 +118,14 @@ export async function POST(req: NextRequest) {
       const enriched = await enrichWord(
         cleanTerm,
         rest.contextSentence || rest.source_context?.sentence,
-        rest.source || rest.source_context?.source
+        rest.source || rest.source_context?.source,
+        targetLang
       );
       cardData = {
         ...enriched,
+        language: targetLang || enriched.language || 'en',
+        gender: rest.gender !== undefined ? rest.gender : (enriched.gender || null),
+        english_gloss: rest.english_gloss !== undefined ? rest.english_gloss : (enriched.english_gloss || null),
         user_id: userId,
       };
     }

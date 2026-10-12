@@ -19,6 +19,7 @@ import {
 import { VocabCard, CardWithSrs } from '@/types/lexis';
 import { apiFetch, ApiError, errorMessageOf, notifyCardsUpdated } from '@/lib/api-client';
 import { parseShareTargetPayload } from '@/lib/share-parser';
+import { detectLanguage, formatGenderBadge } from '@/lib/language';
 import { cn } from '@/lib/utils';
 
 export default function QuickCapturePage() {
@@ -32,6 +33,20 @@ export default function QuickCapturePage() {
   const [author, setAuthor] = useState('');
   const [page, setPage] = useState('');
   const [showSourceFields, setShowSourceFields] = useState(false);
+
+  // Language selection & auto-detection
+  const [selectedLanguage, setSelectedLanguage] = useState<'auto' | 'en' | 'es'>('auto');
+  const [detectedLanguage, setDetectedLanguage] = useState<'en' | 'es'>('en');
+  const effectiveLanguage: 'en' | 'es' =
+    selectedLanguage === 'auto' ? detectedLanguage : selectedLanguage;
+
+  // Dynamically detect language as user types or shared text is loaded
+  useEffect(() => {
+    const combined = `${term} ${contextSentence}`.trim();
+    if (combined) {
+      setDetectedLanguage(detectLanguage(combined));
+    }
+  }, [term, contextSentence]);
 
   // Processing state
   const [isLoading, setIsLoading] = useState(false);
@@ -152,6 +167,7 @@ export default function QuickCapturePage() {
         method: 'POST',
         body: JSON.stringify({
           term: cleanTerm,
+          language: effectiveLanguage,
           contextSentence: contextSentence.trim() || undefined,
           source: source.trim() || undefined,
           author: author.trim() || undefined,
@@ -169,6 +185,9 @@ export default function QuickCapturePage() {
         user_id: raw.user_id,
         created_at: raw.created_at || new Date().toISOString(),
         term: raw.term || cleanTerm,
+        language: raw.language || effectiveLanguage,
+        gender: raw.gender || null,
+        english_gloss: raw.english_gloss || null,
         part_of_speech: raw.part_of_speech || 'noun',
         phonetic: raw.phonetic || null,
         primary_definition: raw.primary_definition,
@@ -286,14 +305,64 @@ export default function QuickCapturePage() {
       {/* Capture Input Card */}
       <div className="bg-white border border-[#e7e5e4] rounded-2xl p-6 sm:p-8 shadow-sm space-y-6">
         <form onSubmit={handleEnrich} className="space-y-5">
-          {/* Word Input */}
+          {/* Word Input & Language Pill Toggle */}
           <div className="space-y-2">
-            <label
-              htmlFor="term-input"
-              className="block text-xs font-sans uppercase tracking-wider font-semibold text-[#57534e]"
-            >
-              Target Word or Lemma <span className="text-[#834832]">*</span>
-            </label>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <label
+                htmlFor="term-input"
+                className="block text-xs font-sans uppercase tracking-wider font-semibold text-[#57534e]"
+              >
+                Target Word or Lemma <span className="text-[#834832]">*</span>
+              </label>
+
+              {/* Language Selection Pill Toggle */}
+              <div className="inline-flex items-center rounded-lg border border-[#e7e5e4] p-0.5 bg-[#fdf8f6]/80 text-xs font-sans">
+                <button
+                  type="button"
+                  onClick={() => setSelectedLanguage('auto')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-md transition-all font-medium flex items-center gap-1.5',
+                    selectedLanguage === 'auto'
+                      ? 'bg-white text-[#834832] shadow-xs font-semibold'
+                      : 'text-[#78716c] hover:text-[#1c1917]'
+                  )}
+                >
+                  <span>Auto</span>
+                  {selectedLanguage === 'auto' && (
+                    <span className="text-[10px] font-normal text-[#834832]/80">
+                      ({detectedLanguage === 'es' ? '🇪🇸 Español' : '🇬🇧 English'})
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedLanguage('en')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-md transition-all font-medium flex items-center gap-1',
+                    selectedLanguage === 'en'
+                      ? 'bg-white text-[#834832] shadow-xs font-semibold'
+                      : 'text-[#78716c] hover:text-[#1c1917]'
+                  )}
+                >
+                  <span>🇬🇧 English</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedLanguage('es')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-md transition-all font-medium flex items-center gap-1',
+                    selectedLanguage === 'es'
+                      ? 'bg-white text-[#834832] shadow-xs font-semibold'
+                      : 'text-[#78716c] hover:text-[#1c1917]'
+                  )}
+                >
+                  <span>🇪🇸 Español</span>
+                </button>
+              </div>
+            </div>
+
             <div className="relative">
               <input
                 ref={inputRef}
@@ -303,7 +372,11 @@ export default function QuickCapturePage() {
                 value={term}
                 onChange={handleTermChange}
                 disabled={isLoading}
-                placeholder="e.g. pellucid, hermeneutic, sesquipedalian"
+                placeholder={
+                  effectiveLanguage === 'es'
+                    ? 'p. ej. desahuciado, soledad, desasosiego'
+                    : 'e.g. pellucid, hermeneutic, sesquipedalian'
+                }
                 className="w-full text-xl sm:text-2xl font-serif text-[#1c1917] bg-[#fdf8f6]/50 border border-[#e7e5e4] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[#834832] focus:border-transparent transition-all placeholder:text-[#a8a29e]"
               />
               {isLoading && (
@@ -501,7 +574,7 @@ export default function QuickCapturePage() {
           {/* Card Top / Header */}
           <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 border-b border-[#e7e5e4] pb-4">
             <div className="space-y-1">
-              <div className="flex items-baseline gap-3">
+              <div className="flex items-baseline gap-2.5 flex-wrap">
                 <h2 className="text-3xl font-serif font-bold text-[#1c1917] capitalize">
                   {previewCard.term}
                 </h2>
@@ -510,9 +583,20 @@ export default function QuickCapturePage() {
                     {previewCard.phonetic}
                   </span>
                 )}
+                {/* Language Badge */}
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-sans font-semibold bg-stone-100 text-stone-700 border border-stone-200">
+                  {previewCard.language === 'es' ? '🇪🇸 Español' : '🇬🇧 English'}
+                </span>
+                {/* Part of Speech */}
                 <span className="px-2.5 py-0.5 rounded-full text-xs font-sans font-medium bg-[#834832]/10 text-[#834832]">
                   {previewCard.part_of_speech}
                 </span>
+                {/* Distinctive Grammatical Gender Badge (Spanish) */}
+                {previewCard.language === 'es' && previewCard.gender && (
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-sans font-semibold bg-amber-50 text-amber-900 border border-amber-300">
+                    {formatGenderBadge(previewCard.gender, previewCard.part_of_speech)?.fullBadge || previewCard.gender}
+                  </span>
+                )}
               </div>
             </div>
 
@@ -563,6 +647,19 @@ export default function QuickCapturePage() {
             </p>
           </div>
 
+          {/* English Anchor / Gloss Callout (Spanish cards) */}
+          {previewCard.language === 'es' && previewCard.english_gloss && (
+            <div className="bg-[#f0f9ff] border border-[#bae6fd] rounded-xl p-4 space-y-1.5 animate-in fade-in">
+              <div className="flex items-center gap-2 text-xs font-sans font-semibold text-[#0369a1] uppercase tracking-wider">
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>English Anchor / Gloss</span>
+              </div>
+              <p className="text-base font-serif italic text-[#0c4a6e] font-medium leading-relaxed">
+                “{previewCard.english_gloss}”
+              </p>
+            </div>
+          )}
+
           {/* Connotative Nuance Badge */}
           {previewCard.nuance_note && (
             <div className="bg-[#fdf8f6] border border-[#eaddd7] rounded-xl p-4 space-y-1.5">
@@ -584,22 +681,40 @@ export default function QuickCapturePage() {
                 <span>Etymological Roots & Morphemes</span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {previewCard.etymology.roots.map((root, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between p-3 rounded-lg bg-stone-50 border border-stone-200 text-xs font-sans"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="px-1.5 py-0.5 rounded bg-stone-200 text-stone-700 font-mono text-[10px] font-bold">
-                        {root.origin}
-                      </span>
-                      <span className="font-serif italic font-bold text-sm text-[#1c1917]">
-                        {root.morpheme}
-                      </span>
+                {previewCard.etymology.roots.map((root, idx) => {
+                  const origLower = (root.origin || '').toLowerCase();
+                  const isArabic = origLower.includes('árabe') || origLower.includes('arabe') || origLower.includes('arabic');
+                  const isGreek = origLower.includes('griego') || origLower.includes('greek');
+                  const isLatin = origLower.includes('lat') || origLower.includes('latín');
+
+                  return (
+                    <div
+                      key={idx}
+                      className="flex items-center justify-between p-3 rounded-lg bg-stone-50 border border-stone-200 text-xs font-sans"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={cn(
+                            'px-1.5 py-0.5 rounded font-mono text-[10px] font-bold uppercase',
+                            isArabic
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                              : isGreek
+                              ? 'bg-blue-100 text-blue-800 border border-blue-200'
+                              : isLatin
+                              ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                              : 'bg-stone-200 text-stone-700'
+                          )}
+                        >
+                          {root.origin}
+                        </span>
+                        <span className="font-serif italic font-bold text-sm text-[#1c1917]">
+                          {root.morpheme}
+                        </span>
+                      </div>
+                      <span className="text-[#57534e]">“{root.meaning}”</span>
                     </div>
-                    <span className="text-[#57534e]">“{root.meaning}”</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               {previewCard.etymology.cognates?.length > 0 && (

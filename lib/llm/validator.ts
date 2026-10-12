@@ -1,7 +1,7 @@
 import { ProductionEvaluationSchema, ProductionEvaluationPayload } from './schema';
 import { ProductionValidationResult } from '@/types/lexis';
 import { areTermsVariants } from '@/lib/db';
-import { getGeminiApiKey, extractJsonFromText } from './enricher';
+import { getGeminiApiKey, extractJsonFromText, detectLanguage } from './enricher';
 
 // ============================================================================
 // Built-in Deterministic Sentence Validator (ACT-03 Fallback)
@@ -13,20 +13,23 @@ export function validateProductionFallback(
 ): ProductionValidationResult {
   const term = rawTerm.trim().toLowerCase();
   const sentence = rawSentence.trim();
+  const isSpanish = detectLanguage(rawTerm, rawSentence) === 'es';
 
   // 1. Check for empty or whitespace sentence
   if (!sentence) {
     return {
       evaluationStatus: 'incorrect_usage',
-      feedback: 'Please write a sentence containing the target word.',
+      feedback: isSpanish
+        ? 'Por favor, escriba una oración que contenga la palabra objetivo.'
+        : 'Please write a sentence containing the target word.',
       registerDetected: 'Empty',
     };
   }
 
-  // 2. Tokenize sentence words
+  // 2. Tokenize sentence words (preserving Spanish accented characters and ñ)
   const words = sentence
     .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, ' ')
+    .replace(/[^a-záéíóúüñ0-9\s-]/gi, ' ')
     .split(/\s+/)
     .filter(Boolean);
 
@@ -36,8 +39,10 @@ export function validateProductionFallback(
   if (!containsTarget) {
     return {
       evaluationStatus: 'incorrect_usage',
-      feedback: `The target word "${rawTerm}" was not detected in your sentence. Ensure you deploy the word or a recognized grammatical derivative.`,
-      registerDetected: 'Informal / Incomplete',
+      feedback: isSpanish
+        ? `El término objetivo "${rawTerm}" no fue detectado en su oración. Asegúrese de emplear la palabra o una variante morfológica reconocida.`
+        : `The target word "${rawTerm}" was not detected in your sentence. Ensure you deploy the word or a recognized grammatical derivative.`,
+      registerDetected: isSpanish ? 'Incompleto / Coloquial' : 'Informal / Incomplete',
     };
   }
 
@@ -46,15 +51,130 @@ export function validateProductionFallback(
     const capitalized = rawTerm.charAt(0).toUpperCase() + rawTerm.slice(1);
     return {
       evaluationStatus: 'awkward',
-      feedback: `The sentence is too succinct to demonstrate nuanced command of "${rawTerm}". Elaborate with richer situational or descriptive context.`,
-      registerDetected: 'Colloquial / Terse',
-      revisedSentence: `The critic's appraisal was remarkably ${term}, illuminating themes previously overlooked.`,
+      feedback: isSpanish
+        ? `La oración es demasiado sucinta para demostrar un dominio cabal de "${rawTerm}". Enriquezca el enunciado con mayor contexto descriptivo o literario.`
+        : `The sentence is too succinct to demonstrate nuanced command of "${rawTerm}". Elaborate with richer situational or descriptive context.`,
+      registerDetected: isSpanish ? 'Coloquial / Conciso' : 'Colloquial / Terse',
+      revisedSentence: isSpanish
+        ? `Aquel ensayo evocaba con maestría la significación de ${term} en la literatura contemporánea.`
+        : `The critic's appraisal was remarkably ${term}, illuminating themes previously overlooked.`,
     };
   }
 
-  // 5. Part of speech & syntax checks
   const lowerSentence = sentence.toLowerCase();
 
+  // 5. Spanish Grammar & Stylistic Rules
+  if (isSpanish) {
+    // 5a. Subjunctive mood (Modo Subjuntivo) check for "ojalá"
+    if (term === 'ojalá' || lowerSentence.includes('ojalá') || lowerSentence.includes('ojala')) {
+      const indicativeSubjunctiveMismatches: [RegExp, string][] = [
+        [/\bllueve\b/i, 'llueva'],
+        [/\bllovió\b/i, 'lloviera'],
+        [/\bpuede\b/i, 'pueda'],
+        [/\bpudo\b/i, 'pudiera'],
+        [/\bes\b/i, 'sea'],
+        [/\bera\b/i, 'fuera'],
+        [/\bfue\b/i, 'fuera'],
+        [/\bestá\b/i, 'esté'],
+        [/\bestaba\b/i, 'estuviera'],
+        [/\bviene\b/i, 'venga'],
+        [/\bvino\b/i, 'viniera'],
+        [/\bhace\b/i, 'haga'],
+        [/\btiene\b/i, 'tenga'],
+        [/\bva\b/i, 'vaya'],
+        [/\bacontece\b/i, 'acontezca'],
+        [/\baconteció\b/i, 'aconteciera'],
+      ];
+
+      for (const [indRegex, subjForm] of indicativeSubjunctiveMismatches) {
+        if (indRegex.test(lowerSentence)) {
+          return {
+            evaluationStatus: 'incorrect_usage',
+            feedback: `"Ojalá" rige obligatoriamente el modo subjuntivo (ej. "${subjForm}"), nunca el modo indicativo.`,
+            registerDetected: 'Error Gramatical (Modo Subjuntivo)',
+            revisedSentence: sentence.replace(indRegex, subjForm),
+          };
+        }
+      }
+    }
+
+    // 5b. Gender agreement (Concordancia de género)
+    if (term === 'añoranza') {
+      if (/\b(un|el|este|ese|aquel)\s+añoranza\b/i.test(lowerSentence)) {
+        return {
+          evaluationStatus: 'incorrect_usage',
+          feedback: '"Añoranza" es un sustantivo femenino. Requiere concordancia con artículos y modificadores femeninos (ej. "la añoranza", "una profunda añoranza").',
+          registerDetected: 'Discordancia de Género',
+          revisedSentence: sentence.replace(/\b(un|el|este|ese|aquel)\s+añoranza\b/i, (m, art) => {
+            const map: Record<string, string> = { un: 'una', el: 'la', este: 'esta', ese: 'esa', aquel: 'aquella' };
+            return `${map[art.toLowerCase()] || 'la'} añoranza`;
+          }),
+        };
+      }
+    }
+
+    if (term === 'desahuciado') {
+      if (/\b(la|una|esta|esa|aquella)\s+desahuciado\b/i.test(lowerSentence)) {
+        return {
+          evaluationStatus: 'incorrect_usage',
+          feedback: 'Discordancia de género: use "desahuciada" para concordar con el artículo femenino ("la desahuciada").',
+          registerDetected: 'Discordancia de Género',
+          revisedSentence: sentence.replace(/\bdesahuciado\b/i, 'desahuciada'),
+        };
+      }
+      if (/\b(el|un|este|ese|aquel)\s+desahuciada\b/i.test(lowerSentence)) {
+        return {
+          evaluationStatus: 'incorrect_usage',
+          feedback: 'Discordancia de género: use "el desahuciado" para concordar con el artículo masculino.',
+          registerDetected: 'Discordancia de Género',
+          revisedSentence: sentence.replace(/\bdesahuciada\b/i, 'desahuciado'),
+        };
+      }
+
+      // 5c. Ser vs Estar check for clinical condition
+      if (
+        /\b(es|era)\s+desahuciad[oa]s?\b/i.test(lowerSentence) &&
+        !/\bpor\s+(el|la|los|las|un|una)\s+(juez|tribunal|corte|arrendador|propietario)\b/i.test(lowerSentence)
+      ) {
+        return {
+          evaluationStatus: 'awkward',
+          feedback: 'Para expresar la condición o estado clínico de un paciente, es más idóneo emplear el verbo "estar" ("está desahuciado") en lugar de "ser", a menos que se trate de una voz pasiva con agente legal ("fue desahuciado por el tribunal").',
+          registerDetected: 'Uso Impreciso de Ser / Estar',
+          revisedSentence: sentence.replace(
+            /\b(es|era)\s+(desahuciad[oa]s?)\b/i,
+            (m, v, adj) => `${v.toLowerCase() === 'era' ? 'estaba' : 'está'} ${adj}`
+          ),
+        };
+      }
+    }
+
+    // Punctuation and capitalization check for Spanish (support ¿ and ¡)
+    const hasCapital = /^[A-ZÁÉÍÓÚÜÑ¿¡]/.test(sentence);
+    const hasPunctuation = /[.!?]$/.test(sentence);
+
+    if (!hasCapital || !hasPunctuation) {
+      const corrected =
+        (hasCapital ? sentence[0] : sentence[0].toUpperCase()) +
+        sentence.slice(1) +
+        (hasPunctuation ? '' : '.');
+
+      return {
+        evaluationStatus: 'pass',
+        feedback: `Excelente ejecución contextual de "${rawTerm}". Asegúrese de incluir mayúscula inicial y puntuación de cierre formal.`,
+        registerDetected: targetRegister || 'Prosa literaria culta / Alto registro',
+        revisedSentence: corrected,
+      };
+    }
+
+    return {
+      evaluationStatus: 'pass',
+      feedback: `Excelente aplicación de "${rawTerm}". La oración exhibe una notable elevación estilística, precisión léxica y perfecta concordancia gramatical.`,
+      registerDetected: targetRegister || 'Prosa literaria culta / Alto registro',
+      revisedSentence: sentence,
+    };
+  }
+
+  // 6. English part of speech & syntax checks
   // Part of speech mismatch: using "solipsism" as an adjective without preposition
   if (term === 'solipsism' && /\b(is|was|are|were|am)\s+solipsism\b/.test(lowerSentence)) {
     return {
@@ -99,7 +219,7 @@ export function validateProductionFallback(
     };
   }
 
-  // 6. Successful validation
+  // 7. Successful validation
   return {
     evaluationStatus: 'pass',
     feedback: `Superb application of "${rawTerm}". The sentence displays authentic syntactic fluidity, acute tonal elevation, and compelling semantic resonance.`,
@@ -119,7 +239,27 @@ async function evaluateWithGemini(
   const apiKey = getGeminiApiKey();
   if (!apiKey) return null;
 
-  const prompt = `You are a rigorous literary editor and stylistic judge evaluating a user's original sentence deploying the target vocabulary word: "${term}".
+  const isSpanish = detectLanguage(term, userSentence) === 'es';
+
+  const prompt = isSpanish
+    ? `You are an exacting literary critic and philologist of the Real Academia Española evaluating a user's original Spanish sentence deploying the target vocabulary word: "${term}".
+Target register requested: "${targetRegister || 'Prosa literaria o académica de alto registro'}".
+User sentence to evaluate: "${userSentence}".
+
+Analyze the sentence with meticulous Spanish grammatical and stylistic criteria:
+1. Syntactic accuracy: part of speech, verbal agreement (subjunctive vs indicative, e.g. after "ojalá"), ser vs estar, and noun-adjective gender/number agreement.
+2. High-register literary elegance (prosa culta) vs colloquial or anglicized phrasing.
+3. Substantive contextual usage showing genuine semantic mastery of the target Spanish word.
+
+Return a JSON object conforming strictly to this schema:
+{
+  "evaluationStatus": "pass" | "incorrect_usage" | "awkward",
+  "feedback": "Concise, constructive critique (1-3 sentences) detailing why it passed or failed.",
+  "revisedSentence": "Optional refined or corrected version polishing the prose (or null).",
+  "registerDetected": "Brief description of the tone/register detected (e.g. 'Prosa literaria culta', 'Coloquial', 'Discordancia gramatical', etc.)"
+}
+Output ONLY raw JSON.`
+    : `You are a rigorous literary editor and stylistic judge evaluating a user's original sentence deploying the target vocabulary word: "${term}".
 Target register requested: "${targetRegister || 'High-register literary or academic'}".
 User sentence to evaluate: "${userSentence}".
 

@@ -43,6 +43,23 @@ describe('Lexis Engine API Route Handlers', () => {
       expect(json.data.part_of_speech).toBe('adjective');
       expect(json.data.etymology.roots.length).toBeGreaterThan(0);
     });
+
+    it('enriches Spanish term when language is specified in request body', async () => {
+      const req = new NextRequest('http://localhost:3000/api/enrich', {
+        method: 'POST',
+        body: JSON.stringify({ term: 'añoranza', language: 'es' }),
+      });
+      const res = await enrichHandler(req);
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.success).toBe(true);
+      expect(json.data.term).toBe('añoranza');
+      expect(json.data.language).toBe('es');
+      expect(json.data.gender).toBe('feminine');
+      expect(json.card.language).toBe('es');
+      expect(json.card.gender).toBe('feminine');
+      expect(json.card.english_gloss).toBeDefined();
+    });
   });
 
   describe('GET & POST /api/cards', () => {
@@ -96,6 +113,44 @@ describe('Lexis Engine API Route Handlers', () => {
       expect(json.success).toBe(true);
       expect(json.data.term).toBe('obfuscate');
       expect(json.data.srs).toBeDefined();
+    });
+
+    it('creates a new Spanish card with language, gender, and english_gloss', async () => {
+      const req = new NextRequest('http://localhost:3000/api/cards', {
+        method: 'POST',
+        body: JSON.stringify({ term: 'ojalá', language: 'es' }),
+      });
+      const res = await postCardHandler(req);
+      expect(res.status).toBe(201);
+      const json = await res.json();
+      expect(json.success).toBe(true);
+      expect(json.data.term).toBe('ojalá');
+      expect(json.data.language).toBe('es');
+      expect(json.data.english_gloss).toBeDefined();
+    });
+
+    it('filters cards by language in GET /api/cards?language=es', async () => {
+      const createReq = new NextRequest('http://localhost:3000/api/cards', {
+        method: 'POST',
+        body: JSON.stringify({ term: 'ojalá', language: 'es' }),
+      });
+      await postCardHandler(createReq);
+
+      const esReq = new NextRequest('http://localhost:3000/api/cards?language=es');
+      const esRes = await getCardsHandler(esReq);
+      expect(esRes.status).toBe(200);
+      const esJson = await esRes.json();
+      expect(esJson.success).toBe(true);
+      expect(esJson.count).toBe(1);
+      expect(esJson.data[0].term).toBe('ojalá');
+      expect(esJson.data[0].language).toBe('es');
+
+      const enReq = new NextRequest('http://localhost:3000/api/cards?language=en');
+      const enRes = await getCardsHandler(enReq);
+      expect(enRes.status).toBe(200);
+      const enJson = await enRes.json();
+      expect(enJson.count).toBe(5);
+      expect(enJson.data.every((c: any) => c.language === 'en')).toBe(true);
     });
   });
 
@@ -192,6 +247,33 @@ describe('Lexis Engine API Route Handlers', () => {
       expect(json.success).toBe(true);
       expect(json.card.srs.reps).toBeGreaterThan(dueCard.srs.reps);
       expect(json.schedulePreviews).toBeDefined();
+    });
+
+    it('filters review queue by language in GET /api/review?language=es', async () => {
+      // Create a Spanish card
+      const createReq = new NextRequest('http://localhost:3000/api/cards', {
+        method: 'POST',
+        body: JSON.stringify({ term: 'desahuciado', language: 'es' }),
+      });
+      await postCardHandler(createReq);
+
+      // Query Spanish due cards
+      const esReq = new NextRequest('http://localhost:3000/api/review?language=es');
+      const esRes = await getReviewHandler(esReq);
+      expect(esRes.status).toBe(200);
+      const esJson = await esRes.json();
+      expect(esJson.success).toBe(true);
+      expect(esJson.count).toBe(1);
+      expect(esJson.data[0].term).toBe('desahuciado');
+      expect(esJson.data[0].language).toBe('es');
+
+      // Query English due cards
+      const enReq = new NextRequest('http://localhost:3000/api/review?language=en');
+      const enRes = await getReviewHandler(enReq);
+      expect(enRes.status).toBe(200);
+      const enJson = await enRes.json();
+      expect(enJson.count).toBe(3);
+      expect(enJson.data.every((c: any) => c.language === 'en')).toBe(true);
     });
   });
 
