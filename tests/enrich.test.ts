@@ -5,6 +5,7 @@ import {
   synthesizeLexicalFallback,
   extractJsonFromText,
   getGeminiApiKey,
+  normalizeLexicalPayload,
 } from '@/lib/llm/enricher';
 
 describe('Lexical Schema & Enrichment Engine (ING-02)', () => {
@@ -142,5 +143,56 @@ describe('Lexical Schema & Enrichment Engine (ING-02)', () => {
     expect(fallback.is_fallback).toBe(true);
     expect(fallback.enrichment_source).toBe('dictionary');
     expect(fallback.primary_definition).not.toContain('Pertaining to or embodying');
+  });
+
+  describe('normalizeLexicalPayload (Defensive Schema Handling)', () => {
+    it('normalizes alternate field names (definition, partOfSpeech) from LLMs', () => {
+      const rawLlmOutput = {
+        term: 'epistemology',
+        partOfSpeech: 'noun',
+        definition: 'The philosophical theory of knowledge and justified belief.',
+        nuance: 'Distinguished from ontology or methodology.',
+        etymology: {
+          roots: ['episteme (knowledge, Greek)', 'logos (study, Greek)'],
+          cognates: ['epistemic'],
+        },
+        collocations: ['epistemological framework', 'virtue epistemology'],
+        distinctionMatrix: {
+          synonyms: ['epistemology', 'gnoseology'],
+          nuance_comparison: 'Epistemology is the standard philosophical term in Anglo-American discourse.',
+          context_recommendations: [
+            {
+              word: 'epistemology',
+              recommended_register: 'Philosophical Prose',
+              example_sentence: 'His critique exposed the flaws of Cartesian epistemology.',
+            },
+          ],
+        },
+      };
+
+      const normalized = normalizeLexicalPayload(rawLlmOutput, 'epistemology');
+      expect(normalized.term).toBe('epistemology');
+      expect(normalized.part_of_speech).toBe('noun');
+      expect(normalized.primary_definition).toBe('The philosophical theory of knowledge and justified belief.');
+      expect(normalized.nuance_note).toBe('Distinguished from ontology or methodology.');
+      expect(normalized.etymology.roots.length).toBe(2);
+      expect(normalized.distinction_matrix?.contextRecommendations[0].recommendedRegister).toBe('Philosophical Prose');
+      expect(normalized.distinction_matrix?.contextRecommendations[0].exampleSentence).toContain('Cartesian epistemology');
+      expect(LexicalEnrichmentSchema.safeParse(normalized).success).toBe(true);
+    });
+
+    it('handles completely minimal or missing subfields gracefully', () => {
+      const bareBones = {
+        term: 'lucid',
+        definition: 'Expressed clearly; easy to understand.',
+      };
+
+      const normalized = normalizeLexicalPayload(bareBones, 'lucid');
+      expect(normalized.term).toBe('lucid');
+      expect(normalized.primary_definition).toBe('Expressed clearly; easy to understand.');
+      expect(normalized.part_of_speech).toBe('noun'); // default
+      expect(normalized.cloze_sentences.length).toBeGreaterThan(0);
+      expect(LexicalEnrichmentSchema.safeParse(normalized).success).toBe(true);
+    });
   });
 });

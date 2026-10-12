@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
-import { getGeminiApiKey } from '@/lib/llm/enricher';
+import { getGeminiApiKey, probeGeminiEnrichment } from '@/lib/llm/enricher';
 import { createClient } from '@supabase/supabase-js';
 
+export const maxDuration = 30;
 export const dynamic = 'force-dynamic';
 
 async function probeSupabase() {
@@ -185,9 +186,9 @@ export async function GET() {
     const candidateModels = [
       process.env.GEMINI_MODEL,
       'gemini-3.8-flash',
-      'gemini-2.5-flash',
+      'gemini-3.7-flash',
+      'gemini-3.5-flash',
       ...availableFromGoogle.slice(0, 3),
-      'gemini-2.0-flash',
     ].filter(Boolean) as string[];
     const uniqueModels = Array.from(new Set(candidateModels));
 
@@ -244,6 +245,16 @@ export async function GET() {
     };
   }
 
+  // Live End-to-End Lexical Enrichment Probe
+  const enrichmentProbe = geminiKey
+    ? await probeGeminiEnrichment(geminiKey, 'perspicacious')
+    : {
+        tested: false,
+        success: false,
+        latencyMs: 0,
+        error: 'No Gemini API key available to test enrichment.',
+      };
+
   // Probe Public Dictionary Fallback API
   let dictionaryProbe = { success: false };
   try {
@@ -268,6 +279,9 @@ export async function GET() {
     overallStatus = 'GEMINI_KEY_ERROR';
     guidance =
       'Google Gemini API rejected the request. Inspect geminiProbe.models for the exact error code from Google.';
+  } else if (enrichmentProbe.tested && !enrichmentProbe.success) {
+    overallStatus = 'GEMINI_ENRICHMENT_FAILED';
+    guidance = `Gemini responded to ping but lexical enrichment failed: ${enrichmentProbe.error || 'schema or timeout error'}`;
   }
 
   return NextResponse.json(
@@ -277,6 +291,7 @@ export async function GET() {
       environment: envInspection,
       supabaseProbe,
       geminiProbe: geminiProbeResult,
+      enrichmentProbe,
       dictionaryFallbackProbe: dictionaryProbe,
       guidance,
     },

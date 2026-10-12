@@ -8,6 +8,9 @@ import {
 import { enrichWord } from '@/lib/llm/enricher';
 import { DEFAULT_USER_ID } from '@/lib/db/seed-data';
 
+export const maxDuration = 30;
+export const dynamic = 'force-dynamic';
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);

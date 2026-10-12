@@ -398,111 +398,367 @@ export function synthesizeLexicalFallback(
 }
 
 // ============================================================================
-// Google Gemini API Ingestion
+// Google Gemini API Ingestion & Defensive Normalizer
 // ============================================================================
-async function fetchGeminiEnrichment(
+
+export const GEMINI_RESPONSE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    term: { type: 'STRING' },
+    part_of_speech: { type: 'STRING' },
+    phonetic: { type: 'STRING' },
+    primary_definition: { type: 'STRING' },
+    nuance_note: { type: 'STRING' },
+    etymology: {
+      type: 'OBJECT',
+      properties: {
+        roots: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              morpheme: { type: 'STRING' },
+              meaning: { type: 'STRING' },
+              origin: { type: 'STRING' },
+            },
+            required: ['morpheme', 'meaning', 'origin'],
+          },
+        },
+        cognates: { type: 'ARRAY', items: { type: 'STRING' } },
+      },
+      required: ['roots', 'cognates'],
+    },
+    collocations: { type: 'ARRAY', items: { type: 'STRING' } },
+    cloze_sentences: { type: 'ARRAY', items: { type: 'STRING' } },
+    distinction_matrix: {
+      type: 'OBJECT',
+      properties: {
+        synonyms: { type: 'ARRAY', items: { type: 'STRING' } },
+        nuanceComparison: { type: 'STRING' },
+        contextRecommendations: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              word: { type: 'STRING' },
+              recommendedRegister: { type: 'STRING' },
+              exampleSentence: { type: 'STRING' },
+            },
+            required: ['word', 'recommendedRegister', 'exampleSentence'],
+          },
+        },
+      },
+      required: ['synonyms', 'nuanceComparison', 'contextRecommendations'],
+    },
+  },
+  required: [
+    'term',
+    'part_of_speech',
+    'primary_definition',
+    'nuance_note',
+    'etymology',
+    'collocations',
+    'cloze_sentences',
+    'distinction_matrix',
+  ],
+};
+
+export function normalizeLexicalPayload(raw: any, targetTerm: string): LexicalEnrichmentPayload {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('Raw enrichment data is not an object');
+  }
+
+  const term = (raw.term && typeof raw.term === 'string' && raw.term.trim()) || targetTerm.trim();
+  const part_of_speech =
+    raw.part_of_speech ||
+    raw.partOfSpeech ||
+    raw.pos ||
+    'noun';
+
+  const primary_definition =
+    raw.primary_definition ||
+    raw.primaryDefinition ||
+    raw.definition ||
+    raw.meaning ||
+    `A specialized term: ${term}`;
+
+  const phonetic = raw.phonetic || raw.ipa || null;
+  const nuance_note =
+    raw.nuance_note ||
+    raw.nuanceNote ||
+    raw.nuance ||
+    raw.connotation ||
+    null;
+
+  // Etymology roots & cognates
+  const rawEtymology = raw.etymology || {};
+  const rawRoots = Array.isArray(rawEtymology.roots) ? rawEtymology.roots : [];
+  const roots: { morpheme: string; meaning: string; origin: string }[] = rawRoots.map((r: any) => {
+    if (typeof r === 'string') {
+      return { morpheme: r, meaning: 'root morpheme', origin: 'Latin/Greek' };
+    }
+    return {
+      morpheme: String(r.morpheme || r.root || r.prefix || r.suffix || term),
+      meaning: String(r.meaning || r.definition || r.translation || 'semantic root'),
+      origin: String(r.origin || r.language || r.etymon || 'Latin / Greek'),
+    };
+  });
+
+  const rawCognates = Array.isArray(rawEtymology.cognates) ? rawEtymology.cognates : [];
+  const cognates = rawCognates.map((c: any) => String(c)).filter(Boolean);
+
+  // Collocations
+  const rawCollocations = Array.isArray(raw.collocations) ? raw.collocations : [];
+  const collocations = rawCollocations.map((c: any) => String(c)).filter(Boolean);
+
+  // Cloze sentences
+  const rawCloze = Array.isArray(raw.cloze_sentences)
+    ? raw.cloze_sentences
+    : Array.isArray(raw.clozeSentences)
+    ? raw.clozeSentences
+    : Array.isArray(raw.cloze)
+    ? raw.cloze
+    : [];
+  let cloze_sentences = rawCloze.map((s: any) => String(s)).filter(Boolean);
+  if (cloze_sentences.length === 0) {
+    cloze_sentences = [`The critical significance of the {{c1::${term}}} was evident.`];
+  } else {
+    // Ensure at least one cloze has the {{c1::...}} mask
+    cloze_sentences = cloze_sentences.map((s: string) => {
+      if (!s.includes('{{c1::')) {
+        const regex = new RegExp(`\\b${escapeRegExp(term)}[a-z]*\\b`, 'i');
+        if (regex.test(s)) {
+          return s.replace(regex, (m) => `{{c1::${m}}}`);
+        }
+      }
+      return s;
+    });
+  }
+
+  // Distinction matrix
+  const rawMatrix = raw.distinction_matrix || raw.distinctionMatrix;
+  let distinction_matrix = null;
+  if (rawMatrix && typeof rawMatrix === 'object') {
+    const rawSynonyms = Array.isArray(rawMatrix.synonyms) ? rawMatrix.synonyms : [];
+    const synonyms = rawSynonyms.map((s: any) => String(s)).filter(Boolean);
+    if (!synonyms.includes(term)) synonyms.unshift(term);
+
+    const nuanceComparison =
+      rawMatrix.nuanceComparison ||
+      rawMatrix.nuance_comparison ||
+      rawMatrix.comparison ||
+      rawMatrix.nuance ||
+      `${term} conveys elevated precision in literary or scholarly prose.`;
+
+    const rawRecs = Array.isArray(rawMatrix.contextRecommendations)
+      ? rawMatrix.contextRecommendations
+      : Array.isArray(rawMatrix.context_recommendations)
+      ? rawMatrix.context_recommendations
+      : [];
+
+    const contextRecommendations = rawRecs.map((rec: any) => ({
+      word: String(rec.word || term),
+      recommendedRegister: String(
+        rec.recommendedRegister ||
+        rec.recommended_register ||
+        rec.register ||
+        'Elevated / Formal'
+      ),
+      exampleSentence: String(
+        rec.exampleSentence ||
+        rec.example_sentence ||
+        rec.example ||
+        `An incisive use of ${rec.word || term}.`
+      ),
+    }));
+
+    distinction_matrix = {
+      synonyms: synonyms.length > 0 ? synonyms : [term, 'counterpart'],
+      nuanceComparison,
+      contextRecommendations:
+        contextRecommendations.length > 0
+          ? contextRecommendations
+          : [
+              {
+                word: term,
+                recommendedRegister: 'Elevated / Academic Prose',
+                exampleSentence: `A precise application of ${term} in scholarly discourse.`,
+              },
+            ],
+    };
+  }
+
+  const payload: LexicalEnrichmentPayload = {
+    term,
+    part_of_speech: String(part_of_speech),
+    phonetic: phonetic ? String(phonetic) : null,
+    primary_definition: String(primary_definition),
+    nuance_note: nuance_note ? String(nuance_note) : null,
+    etymology: { roots, cognates },
+    collocations,
+    source_context: {
+      sentence: raw.source_context?.sentence || null,
+      source: raw.source_context?.source || null,
+    },
+    cloze_sentences,
+    distinction_matrix,
+    is_fallback: Boolean(raw.is_fallback),
+    enrichment_source: raw.enrichment_source || 'gemini',
+    fallback_reason: raw.fallback_reason || null,
+  };
+
+  return LexicalEnrichmentSchema.parse(payload);
+}
+
+export interface GeminiEnrichmentResponse {
+  payload: LexicalEnrichmentPayload | null;
+  error?: string;
+  modelUsed?: string;
+  rawText?: string;
+}
+
+export async function fetchGeminiEnrichment(
   term: string,
   contextSentence?: string,
   source?: string
-): Promise<LexicalEnrichmentPayload | null> {
+): Promise<GeminiEnrichmentResponse> {
   const apiKey = getGeminiApiKey();
   if (!apiKey) {
-    console.warn('[Gemini API] No valid API key found in environment.');
-    return null;
+    return {
+      payload: null,
+      error: 'No valid GEMINI_API_KEY found in server environment.',
+    };
   }
 
   const prompt = `You are a world-class lexicographer and etymologist. Analyze the target vocabulary word "${term}".
 ${contextSentence ? `Context sentence provided by user: "${contextSentence}"` : ''}
 ${source ? `Source: "${source}"` : ''}
 
-Return a valid JSON object matching this schema:
-{
-  "term": "${term}",
-  "part_of_speech": "noun | verb | adjective | adverb",
-  "phonetic": "IPA phonetic transcription (e.g. /.../)",
-  "primary_definition": "Crisp, rigorous definition",
-  "nuance_note": "Connotative nuances, tone, register distinctions vs near-synonyms",
-  "etymology": {
-    "roots": [
-      { "morpheme": "morpheme string", "meaning": "meaning string", "origin": "Latin | Greek | etc." }
-    ],
-    "cognates": ["cognate1", "cognate2"]
-  },
-  "collocations": ["common high-register phrase 1", "phrase 2", "phrase 3", "phrase 4"],
-  "source_context": {
-    "sentence": ${contextSentence ? JSON.stringify(contextSentence) : 'null'},
-    "source": ${source ? JSON.stringify(source) : 'null'}
-  },
-  "cloze_sentences": [
-    "High-register sentence with {{c1::${term}}} masked",
-    "Second sentence with {{c1::${term}}} masked"
-  ],
-  "distinction_matrix": {
-    "synonyms": ["${term}", "synonym2", "synonym3"],
-    "nuanceComparison": "Comparative explanation of differences between these 3 words",
-    "contextRecommendations": [
-      { "word": "${term}", "recommendedRegister": "register", "exampleSentence": "sentence" },
-      { "word": "synonym2", "recommendedRegister": "register", "exampleSentence": "sentence" },
-      { "word": "synonym3", "recommendedRegister": "register", "exampleSentence": "sentence" }
-    ]
-  }
-}
-Respond with ONLY raw JSON.`;
+Provide a deep etymological breakdown (morphemes, Greek/Latin origins), connotative register nuances, high-register collocations, 2 cloze sentences (with {{c1::${term}}} masked), and a distinction matrix with 3 near-synonyms.`;
 
   const candidateModels = [
     process.env.GEMINI_MODEL,
     'gemini-3.8-flash',
-    'gemini-2.5-flash',
-    'gemini-2.0-flash',
-    'gemini-1.5-flash',
-    'gemini-1.5-pro',
+    'gemini-3.7-flash',
+    'gemini-3.5-flash',
   ].filter(Boolean) as string[];
   const modelsToTry = Array.from(new Set(candidateModels));
 
+  let lastError = 'No models available';
+
   for (const model of modelsToTry) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 7500);
+    for (const withSchema of [true, false]) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
 
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            responseMimeType: 'application/json',
-            temperature: 0.2,
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+        const genConfig: any = {
+          responseMimeType: 'application/json',
+          temperature: 0.2,
+        };
+        if (withSchema) {
+          genConfig.responseSchema = GEMINI_RESPONSE_SCHEMA;
+        }
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: genConfig,
+          }),
+        });
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+          const errorBody = await response.text().catch(() => '');
+          lastError = `Model ${model} returned HTTP ${response.status}: ${errorBody.substring(0, 300)}`;
+          if (withSchema && response.status === 400) {
+            continue;
+          }
+          break;
+        }
+
+        const json = await response.json();
+        const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!rawText) {
+          lastError = `Model ${model} returned empty candidate parts.`;
+          continue;
+        }
+
+        const parsedJson = extractJsonFromText(rawText);
+        if (!parsedJson) {
+          lastError = `Model ${model} response could not be parsed as JSON: ${rawText.substring(0, 200)}`;
+          continue;
+        }
+
+        const normalized = normalizeLexicalPayload(
+          {
+            ...parsedJson,
+            source_context: {
+              sentence: contextSentence?.trim() || parsedJson.source_context?.sentence || null,
+              source: source?.trim() || parsedJson.source_context?.source || null,
+            },
+            is_fallback: false,
+            enrichment_source: 'gemini',
           },
-        }),
-      });
-      clearTimeout(timeout);
+          term
+        );
 
-      if (!response.ok) {
-        const errorBody = await response.text().catch(() => '');
-        console.warn(`[Gemini API] Model ${model} returned HTTP ${response.status}:`, errorBody);
-        continue;
+        return {
+          payload: normalized,
+          modelUsed: model,
+          rawText: rawText.substring(0, 300),
+        };
+      } catch (err: any) {
+        lastError = `Model ${model} exception: ${err?.message || String(err)}`;
       }
-
-      const json = await response.json();
-      const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!rawText) continue;
-
-      const parsedJson = extractJsonFromText(rawText);
-      if (!parsedJson) continue;
-
-      return LexicalEnrichmentSchema.parse({
-        ...parsedJson,
-        is_fallback: false,
-        enrichment_source: 'gemini',
-      });
-    } catch (err: any) {
-      console.warn(`[Gemini API] Request with model ${model} failed:`, err?.message || err);
     }
   }
 
-  return null;
+  return { payload: null, error: lastError };
+}
+
+export async function probeGeminiEnrichment(
+  apiKey?: string | null,
+  testTerm: string = 'perspicacious'
+) {
+  const key = apiKey || getGeminiApiKey();
+  if (!key) {
+    return {
+      tested: false,
+      success: false,
+      message: 'No Gemini API key available to test enrichment.',
+    };
+  }
+
+  const startTime = Date.now();
+  const res = await fetchGeminiEnrichment(testTerm);
+  const latencyMs = Date.now() - startTime;
+
+  if (res.payload) {
+    return {
+      tested: true,
+      success: true,
+      latencyMs,
+      modelUsed: res.modelUsed,
+      source: 'gemini',
+      sampleTerm: res.payload.term,
+      sampleDefinition: res.payload.primary_definition,
+      rootsSample: res.payload.etymology?.roots?.map((r) => `${r.morpheme} (${r.meaning})`) || [],
+      error: null,
+    };
+  }
+
+  return {
+    tested: true,
+    success: false,
+    latencyMs,
+    error: res.error || 'Gemini enrichment failed without explicit error.',
+  };
 }
 
 // ============================================================================
@@ -524,7 +780,7 @@ Include term, part_of_speech, phonetic, primary_definition, nuance_note, etymolo
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4500);
+    const timeout = setTimeout(() => controller.abort(), 6000);
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -556,11 +812,18 @@ Include term, part_of_speech, phonetic, primary_definition, nuance_note, etymolo
     const parsed = extractJsonFromText(rawContent);
     if (!parsed) return null;
 
-    return LexicalEnrichmentSchema.parse({
-      ...parsed,
-      is_fallback: false,
-      enrichment_source: 'openai',
-    });
+    return normalizeLexicalPayload(
+      {
+        ...parsed,
+        source_context: {
+          sentence: contextSentence?.trim() || parsed.source_context?.sentence || null,
+          source: source?.trim() || parsed.source_context?.source || null,
+        },
+        is_fallback: false,
+        enrichment_source: 'openai',
+      },
+      term
+    );
   } catch (err) {
     console.warn('[OpenAI API] Request failed or timed out:', err);
     return null;
@@ -580,9 +843,16 @@ export async function enrichWord(
     throw new Error('Term cannot be empty');
   }
 
+  let failureReason: string | undefined;
+
   // 1. Try Gemini
-  const geminiResult = await fetchGeminiEnrichment(trimmed, contextSentence, source);
-  if (geminiResult) return geminiResult;
+  const geminiRes = await fetchGeminiEnrichment(trimmed, contextSentence, source);
+  if (geminiRes.payload) {
+    return geminiRes.payload;
+  }
+  if (geminiRes.error) {
+    failureReason = `Gemini: ${geminiRes.error}`;
+  }
 
   // 2. Try OpenAI
   const openAiResult = await fetchOpenAIEnrichment(trimmed, contextSentence, source);
@@ -592,5 +862,9 @@ export async function enrichWord(
   const dictData = await fetchDictionaryFallback(trimmed);
 
   // 4. Fall back to intelligent lexical synthesizer (with verified dictionary data if available)
-  return synthesizeLexicalFallback(trimmed, contextSentence, source, dictData);
+  const fallback = synthesizeLexicalFallback(trimmed, contextSentence, source, dictData);
+  if (failureReason) {
+    fallback.fallback_reason = failureReason;
+  }
+  return fallback;
 }

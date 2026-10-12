@@ -12,6 +12,9 @@ import { createInitialSrsCard } from '@/lib/fsrs';
 
 // Auth: middleware.ts requires LEXIS_SECRET_TOKEN (Bearer or x-lexis-token header)
 
+export const maxDuration = 30;
+export const dynamic = 'force-dynamic';
+
 export async function POST(req: NextRequest) {
   try {
     const body: IngestRequestPayload & { rawCitation?: string } = await req.json().catch(() => ({}));

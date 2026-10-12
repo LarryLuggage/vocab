@@ -537,7 +537,10 @@ export default function QuickCapturePage() {
           {previewCard.is_fallback && (
             <div className="p-3.5 bg-amber-50/80 border border-amber-200 rounded-xl text-xs font-sans text-amber-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
               <span className="leading-relaxed">
-                <strong>Notice:</strong> AI service offline or unconfigured on Vercel. Definition retrieved via factual dictionary fallback.
+                <strong>Notice:</strong>{' '}
+                {previewCard.fallback_reason
+                  ? previewCard.fallback_reason
+                  : 'AI service offline or unconfigured on Vercel. Definition retrieved via factual dictionary fallback.'}
               </span>
               <a
                 href="/api/diagnostic"
