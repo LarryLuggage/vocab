@@ -63,10 +63,19 @@ async function probeSupabase() {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    const { data, error } = await client
+    const queryPromise = client
       .from('vocab_cards')
       .select('id, term, distinction_matrix')
       .limit(1);
+
+    const timeoutPromise = new Promise<{ data: any; error: any }>((_, reject) => {
+      setTimeout(() => reject(new Error('Supabase query timed out after 3000ms')), 3000);
+    });
+
+    const { data, error } = (await Promise.race([
+      Promise.resolve(queryPromise),
+      timeoutPromise,
+    ])) as any;
 
     if (error) {
       const isMissingColumn =
@@ -169,7 +178,8 @@ export async function GET(req: Request) {
     let availableFromGoogle: string[] = [];
     try {
       const listRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models?key=${geminiKey}`
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${geminiKey}`,
+        { signal: AbortSignal.timeout(2500) }
       );
       if (listRes.ok) {
         const listData = await listRes.json();
@@ -268,7 +278,9 @@ export async function GET(req: Request) {
   // Probe Public Dictionary Fallback API
   let dictionaryProbe = { success: false };
   try {
-    const dictRes = await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/test');
+    const dictRes = await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/test', {
+      signal: AbortSignal.timeout(2500),
+    });
     dictionaryProbe = { success: dictRes.ok };
   } catch {
     dictionaryProbe = { success: false };
