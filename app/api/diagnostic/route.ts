@@ -186,61 +186,60 @@ export async function GET() {
     const candidateModels = [
       process.env.GEMINI_MODEL,
       'gemini-3.8-flash',
-      'gemini-3.7-flash',
-      'gemini-3.5-flash',
-      ...availableFromGoogle.slice(0, 3),
     ].filter(Boolean) as string[];
     const uniqueModels = Array.from(new Set(candidateModels));
 
     const modelTests: Record<string, any> = {};
 
-    for (const model of uniqueModels) {
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 6000);
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`;
+    await Promise.all(
+      uniqueModels.map(async (model) => {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 3500);
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`;
 
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: 'Respond with the word "pong".' }] }],
-          }),
-        });
-        clearTimeout(timer);
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: 'Respond with the word "pong".' }] }],
+            }),
+          });
+          clearTimeout(timer);
 
-        if (res.ok) {
-          const data = await res.json().catch(() => null);
-          const replyText =
-            data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'OK';
-          modelTests[model] = {
-            success: true,
-            status: res.status,
-            reply: replyText,
-          };
-        } else {
-          const errBody = await res.text().catch(() => '');
+          if (res.ok) {
+            const data = await res.json().catch(() => null);
+            const replyText =
+              data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'OK';
+            modelTests[model] = {
+              success: true,
+              status: res.status,
+              reply: replyText,
+            };
+          } else {
+            const errBody = await res.text().catch(() => '');
+            modelTests[model] = {
+              success: false,
+              status: res.status,
+              statusText: res.statusText,
+              errorBody: errBody.substring(0, 500),
+            };
+          }
+        } catch (err: any) {
           modelTests[model] = {
             success: false,
-            status: res.status,
-            statusText: res.statusText,
-            errorBody: errBody.substring(0, 500),
+            error: err?.message || String(err),
           };
         }
-      } catch (err: any) {
-        modelTests[model] = {
-          success: false,
-          error: err?.message || String(err),
-        };
-      }
-    }
+      })
+    );
 
     const anySuccess = Object.values(modelTests).some((m: any) => m.success);
     geminiProbeResult = {
       tested: true,
       overallSuccess: anySuccess,
-      availableModelsFromGoogle: availableFromGoogle,
+      availableModelsFromGoogle: availableFromGoogle.slice(0, 10),
       models: modelTests,
     };
   }
