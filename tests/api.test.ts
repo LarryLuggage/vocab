@@ -326,7 +326,8 @@ describe('Lexis Engine API Route Handlers', () => {
 
   describe('GET /api/diagnostic', () => {
     it('returns diagnostic inspection payload including environment and supabase probe', async () => {
-      const res = await diagnosticHandler();
+      const req = new Request('http://localhost:3000/api/diagnostic');
+      const res = await diagnosticHandler(req);
       expect(res.status).toBe(200);
       const json = await res.json();
       expect(json.timestamp).toBeDefined();

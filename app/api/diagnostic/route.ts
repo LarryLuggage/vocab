@@ -128,7 +128,7 @@ async function probeSupabase() {
   }
 }
 
-export async function GET(req?: Request) {
+export async function GET(req: Request) {
   const geminiKey = getGeminiApiKey();
   const rawGeminiEnv = process.env.GEMINI_API_KEY;
   const rawGoogleEnv = process.env.GOOGLE_API_KEY;
@@ -261,6 +261,7 @@ export async function GET(req?: Request) {
           tested: Boolean(testEnrichment),
           success: true,
           latencyMs: 0,
+          error: undefined as string | null | undefined,
           note: testEnrichment ? undefined : 'Skipped full generation for fast diagnostic response (pass ?enrichment=true to test).',
         };
 
