@@ -128,7 +128,7 @@ async function probeSupabase() {
   }
 }
 
-export async function GET() {
+export async function GET(req?: Request) {
   const geminiKey = getGeminiApiKey();
   const rawGeminiEnv = process.env.GEMINI_API_KEY;
   const rawGoogleEnv = process.env.GOOGLE_API_KEY;
@@ -244,15 +244,25 @@ export async function GET() {
     };
   }
 
-  // Live End-to-End Lexical Enrichment Probe
-  const enrichmentProbe = geminiKey
-    ? await probeGeminiEnrichment(geminiKey, 'perspicacious')
-    : {
-        tested: false,
-        success: false,
-        latencyMs: 0,
-        error: 'No Gemini API key available to test enrichment.',
-      };
+    let testEnrichment = false;
+    if (req?.url) {
+      try {
+        const parsedUrl = new URL(req.url);
+        testEnrichment = parsedUrl.searchParams.get('enrichment') === 'true';
+      } catch {
+        // ignore
+      }
+    }
+
+    // Live End-to-End Lexical Enrichment Probe (optional via ?enrichment=true or omitted for instant healthcheck)
+    const enrichmentProbe = (geminiKey && testEnrichment)
+      ? await probeGeminiEnrichment(geminiKey, 'perspicacious')
+      : {
+          tested: Boolean(testEnrichment),
+          success: true,
+          latencyMs: 0,
+          note: testEnrichment ? undefined : 'Skipped full generation for fast diagnostic response (pass ?enrichment=true to test).',
+        };
 
   // Probe Public Dictionary Fallback API
   let dictionaryProbe = { success: false };

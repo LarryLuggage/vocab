@@ -1000,85 +1000,77 @@ Provide a deep etymological breakdown (morphemes, Greek/Latin origins), connotat
   const candidateModels = [
     process.env.GEMINI_MODEL,
     'gemini-3.8-flash',
-    'gemini-3.7-flash',
-    'gemini-3.5-flash',
   ].filter(Boolean) as string[];
   const modelsToTry = Array.from(new Set(candidateModels));
 
   let lastError = 'No models available';
 
   for (const model of modelsToTry) {
-    for (const withSchema of [true, false]) {
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 15000);
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 6500);
 
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-        const genConfig: any = {
-          responseMimeType: 'application/json',
-          temperature: 0.2,
-        };
-        if (withSchema) {
-          genConfig.responseSchema = GEMINI_RESPONSE_SCHEMA;
-        }
+      const genConfig: any = {
+        responseMimeType: 'application/json',
+        temperature: 0.2,
+        responseSchema: GEMINI_RESPONSE_SCHEMA,
+      };
 
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: genConfig,
-          }),
-        });
-        clearTimeout(timeout);
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: genConfig,
+        }),
+      });
+      clearTimeout(timeout);
 
-        if (!response.ok) {
-          const errorBody = await response.text().catch(() => '');
-          lastError = `Model ${model} returned HTTP ${response.status}: ${errorBody.substring(0, 300)}`;
-          if (withSchema && response.status === 400) {
-            continue;
-          }
-          break;
-        }
-
-        const json = await response.json();
-        const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!rawText) {
-          lastError = `Model ${model} returned empty candidate parts.`;
-          continue;
-        }
-
-        const parsedJson = extractJsonFromText(rawText);
-        if (!parsedJson) {
-          lastError = `Model ${model} response could not be parsed as JSON: ${rawText.substring(0, 200)}`;
-          continue;
-        }
-
-        const normalized = normalizeLexicalPayload(
-          {
-            ...parsedJson,
-            language: parsedJson.language || lang,
-            source_context: {
-              sentence: contextSentence?.trim() || parsedJson.source_context?.sentence || null,
-              source: source?.trim() || parsedJson.source_context?.source || null,
-            },
-            is_fallback: false,
-            enrichment_source: 'gemini',
-          },
-          parsedJson.term || term,
-          lang
-        );
-
-        return {
-          payload: normalized,
-          modelUsed: model,
-          rawText: rawText.substring(0, 300),
-        };
-      } catch (err: any) {
-        lastError = `Model ${model} exception: ${err?.message || String(err)}`;
+      if (!response.ok) {
+        const errorBody = await response.text().catch(() => '');
+        lastError = `Model ${model} returned HTTP ${response.status}: ${errorBody.substring(0, 300)}`;
+        break;
       }
+
+      const json = await response.json();
+      const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!rawText) {
+        lastError = `Model ${model} returned empty candidate parts.`;
+        break;
+      }
+
+      const parsedJson = extractJsonFromText(rawText);
+      if (!parsedJson) {
+        lastError = `Model ${model} response could not be parsed as JSON: ${rawText.substring(0, 200)}`;
+        break;
+      }
+
+      const normalized = normalizeLexicalPayload(
+        {
+          ...parsedJson,
+          language: parsedJson.language || lang,
+          source_context: {
+            sentence: contextSentence?.trim() || parsedJson.source_context?.sentence || null,
+            source: source?.trim() || parsedJson.source_context?.source || null,
+          },
+          is_fallback: false,
+          enrichment_source: 'gemini',
+        },
+        parsedJson.term || term,
+        lang
+      );
+
+      return {
+        payload: normalized,
+        modelUsed: model,
+        rawText: rawText.substring(0, 300),
+      };
+    } catch (err: any) {
+      lastError = `Model ${model} exception or timeout: ${err?.message || String(err)}`;
+      break;
     }
   }
 
