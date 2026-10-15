@@ -301,10 +301,13 @@ export interface DictionaryApiResponse {
   synonyms: string[];
 }
 
-export async function fetchDictionaryFallback(term: string): Promise<DictionaryApiResponse | null> {
+export async function fetchDictionaryFallback(
+  term: string,
+  timeoutMs: number = 3500
+): Promise<DictionaryApiResponse | null> {
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3500);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     const res = await fetch(
       `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(term.toLowerCase().trim())}`,
       { signal: controller.signal }
@@ -385,8 +388,10 @@ export function synthesizeLexicalFallback(
       english_gloss: curated.english_gloss || null,
       source_context: sourceContext,
       cloze_sentences: clozeSentences,
-      is_fallback: false,
+      // Curated entries are only reached after live enrichment fails, so they are fallbacks.
+      is_fallback: true,
       enrichment_source: 'curated',
+      fallback_reason: 'Curated lexicon entry used because live AI enrichment was unavailable.',
     });
   }
 
@@ -958,6 +963,130 @@ export interface GeminiEnrichmentResponse {
   error?: string;
   modelUsed?: string;
   rawText?: string;
+  /** Last model attempted, including when every attempt failed. */
+  model?: string;
+  /** HTTP status, or a label such as TIMEOUT, EMPTY, PARSE, NO_KEY. */
+  status?: string | number;
+}
+
+/**
+ * gemini-3.8-flash thinks at "medium" by default. Thought tokens count against
+ * the output budget and delay the first JSON token, so a short abort returns
+ * nothing while a one-word ping still succeeds. "minimal" is rejected on 3.8.
+ * 2.5 Flash uses thinkingBudget; 0 turns thinking off for that model only.
+ */
+export const GEMINI_DEFAULT_MODEL = 'gemini-3.8-flash';
+export const GEMINI_FALLBACK_MODEL = 'gemini-2.5-flash';
+export const GEMINI_MAX_OUTPUT_TOKENS = 8192;
+export const GEMINI_PRIMARY_TIMEOUT_MS = 15_000;
+export const GEMINI_FALLBACK_TIMEOUT_MS = 5_000;
+/** All Gemini attempts together stay under the route maxDuration of 30s. */
+export const GEMINI_ENRICHMENT_BUDGET_MS = 20_000;
+
+export function geminiModelsToTry(configuredModel?: string | null): string[] {
+  const primary = (configuredModel?.trim() || GEMINI_DEFAULT_MODEL).replace(/^models\//, '');
+  const fallback =
+    primary === GEMINI_FALLBACK_MODEL ? GEMINI_DEFAULT_MODEL : GEMINI_FALLBACK_MODEL;
+  return primary === fallback ? [primary] : [primary, fallback];
+}
+
+export function geminiAttemptTimeoutMs(attemptIndex: number, elapsedMs: number): number {
+  const desired = attemptIndex === 0 ? GEMINI_PRIMARY_TIMEOUT_MS : GEMINI_FALLBACK_TIMEOUT_MS;
+  const remaining = GEMINI_ENRICHMENT_BUDGET_MS - elapsedMs;
+  return Math.max(0, Math.min(desired, remaining));
+}
+
+export function geminiGenerationConfig(model: string): {
+  responseMimeType: 'application/json';
+  temperature: number;
+  maxOutputTokens: number;
+  responseSchema: typeof GEMINI_RESPONSE_SCHEMA;
+  thinkingConfig?: { thinkingLevel: 'low' } | { thinkingBudget: 0 };
+} {
+  const config = {
+    responseMimeType: 'application/json' as const,
+    temperature: 0.2,
+    maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS,
+    responseSchema: GEMINI_RESPONSE_SCHEMA,
+  };
+  if (model.startsWith('gemini-3')) {
+    return { ...config, thinkingConfig: { thinkingLevel: 'low' } };
+  }
+  if (model.startsWith('gemini-2.5')) {
+    return { ...config, thinkingConfig: { thinkingBudget: 0 } };
+  }
+  return config;
+}
+
+/** Keep the configured model visible even when Google returns a long catalog. */
+export function visibleGeminiModels(available: string[], configuredModel?: string | null): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  const push = (name?: string | null) => {
+    const trimmed = name?.replace(/^models\//, '').trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    ordered.push(trimmed);
+  };
+  push(configuredModel);
+  for (const name of available) push(name);
+  return ordered;
+}
+
+export function redactForLog(text: string): string {
+  return text
+    .replace(/key=[^&\s"']+/gi, 'key=[REDACTED]')
+    .replace(/AIza[0-9A-Za-z\-_]{10,}/g, '[REDACTED_KEY]')
+    .replace(/Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi, 'Bearer [REDACTED]');
+}
+
+export function logGeminiFailure(model: string, status: string | number, errorText: string): void {
+  const safe = redactForLog(errorText).replace(/\s+/g, ' ').slice(0, 500);
+  console.error(`[Gemini enrichment] model=${model} status=${status} error=${safe}`);
+}
+
+export function logEnrichmentFallback(
+  source: string,
+  model: string,
+  status: string | number,
+  errorText: string
+): void {
+  const safe = redactForLog(errorText).replace(/\s+/g, ' ').slice(0, 500);
+  console.error(
+    `[enrichWord fallback] source=${source} model=${model} status=${status} error=${safe}`
+  );
+}
+
+function isAbortError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const name = 'name' in err ? String((err as { name?: string }).name) : '';
+  const message = 'message' in err ? String((err as { message?: string }).message) : String(err);
+  return name === 'AbortError' || name === 'TimeoutError' || /aborted|timeout/i.test(message);
+}
+
+function readGeminiCandidate(json: any): {
+  text: string | null;
+  finishReason: string | null;
+  thoughtsTokenCount: number | null;
+  blockReason: string | null;
+} {
+  const candidate = json?.candidates?.[0];
+  const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+  const text = parts
+    .filter((part: any) => part && typeof part.text === 'string' && part.thought !== true)
+    .map((part: any) => part.text)
+    .join('')
+    .trim();
+  const thoughtsTokenCount =
+    json?.usageMetadata?.thoughtsTokenCount ??
+    json?.usageMetadata?.thoughts_token_count ??
+    null;
+  return {
+    text: text || null,
+    finishReason: candidate?.finishReason || candidate?.finish_reason || null,
+    thoughtsTokenCount,
+    blockReason: json?.promptFeedback?.blockReason || json?.promptFeedback?.block_reason || null,
+  };
 }
 
 export async function fetchGeminiEnrichment(
@@ -968,9 +1097,13 @@ export async function fetchGeminiEnrichment(
 ): Promise<GeminiEnrichmentResponse> {
   const apiKey = getGeminiApiKey();
   if (!apiKey) {
+    const error = 'No valid GEMINI_API_KEY found in server environment.';
+    logGeminiFailure('none', 'NO_KEY', error);
     return {
       payload: null,
-      error: 'No valid GEMINI_API_KEY found in server environment.',
+      error,
+      status: 'NO_KEY',
+      model: 'none',
     };
   }
 
@@ -997,55 +1130,67 @@ ${source ? `Source: "${source}"` : ''}
 
 Provide a deep etymological breakdown (morphemes, Greek/Latin origins), connotative register nuances, high-register collocations, 2 cloze sentences (with {{c1::${term}}} masked), and a distinction matrix with 3 near-synonyms.`;
 
-  const candidateModels = [
-    process.env.GEMINI_MODEL,
-    'gemini-3.8-flash',
-  ].filter(Boolean) as string[];
-  const modelsToTry = Array.from(new Set(candidateModels));
+  const modelsToTry = geminiModelsToTry(process.env.GEMINI_MODEL);
+  const startedAt = Date.now();
 
   let lastError = 'No models available';
+  let lastStatus: string | number = 'NONE';
+  let lastModel = 'none';
 
-  for (const model of modelsToTry) {
+  for (let attempt = 0; attempt < modelsToTry.length; attempt++) {
+    const model = modelsToTry[attempt];
+    const elapsed = Date.now() - startedAt;
+    const timeoutMs = geminiAttemptTimeoutMs(attempt, elapsed);
+    lastModel = model;
+
+    if (timeoutMs < 500) {
+      lastStatus = 'SKIPPED';
+      lastError = `Model ${model} skipped because the ${GEMINI_ENRICHMENT_BUDGET_MS}ms Gemini budget was already used.`;
+      logGeminiFailure(model, lastStatus, lastError);
+      break;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 6500);
-
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-      const genConfig: any = {
-        responseMimeType: 'application/json',
-        temperature: 0.2,
-        responseSchema: GEMINI_RESPONSE_SCHEMA,
-      };
-
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: genConfig,
+          generationConfig: geminiGenerationConfig(model),
         }),
       });
-      clearTimeout(timeout);
 
       if (!response.ok) {
         const errorBody = await response.text().catch(() => '');
+        lastStatus = response.status;
         lastError = `Model ${model} returned HTTP ${response.status}: ${errorBody.substring(0, 300)}`;
-        break;
+        logGeminiFailure(model, lastStatus, lastError);
+        continue;
       }
 
       const json = await response.json();
-      const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!rawText) {
-        lastError = `Model ${model} returned empty candidate parts.`;
-        break;
+      const candidate = readGeminiCandidate(json);
+      if (!candidate.text) {
+        lastStatus = 'EMPTY';
+        lastError =
+          `Model ${model} returned empty candidate parts ` +
+          `(finishReason=${candidate.finishReason || 'unknown'}, ` +
+          `thoughtsTokenCount=${candidate.thoughtsTokenCount ?? 'n/a'}, ` +
+          `blockReason=${candidate.blockReason || 'none'}).`;
+        logGeminiFailure(model, lastStatus, lastError);
+        continue;
       }
 
-      const parsedJson = extractJsonFromText(rawText);
+      const parsedJson = extractJsonFromText(candidate.text);
       if (!parsedJson) {
-        lastError = `Model ${model} response could not be parsed as JSON: ${rawText.substring(0, 200)}`;
-        break;
+        lastStatus = 'PARSE';
+        lastError = `Model ${model} response could not be parsed as JSON: ${candidate.text.substring(0, 200)}`;
+        logGeminiFailure(model, lastStatus, lastError);
+        continue;
       }
 
       const normalized = normalizeLexicalPayload(
@@ -1066,15 +1211,23 @@ Provide a deep etymological breakdown (morphemes, Greek/Latin origins), connotat
       return {
         payload: normalized,
         modelUsed: model,
-        rawText: rawText.substring(0, 300),
+        model,
+        status: response.status,
+        rawText: candidate.text.substring(0, 300),
       };
     } catch (err: any) {
-      lastError = `Model ${model} exception or timeout: ${err?.message || String(err)}`;
-      break;
+      const aborted = isAbortError(err) || controller.signal.aborted;
+      lastStatus = aborted ? 'TIMEOUT' : 'EXCEPTION';
+      lastError = aborted
+        ? `Model ${model} timed out after ${timeoutMs}ms`
+        : `Model ${model} exception: ${err?.message || String(err)}`;
+      logGeminiFailure(model, lastStatus, lastError);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
-  return { payload: null, error: lastError };
+  return { payload: null, error: lastError, status: lastStatus, model: lastModel };
 }
 
 export async function probeGeminiEnrichment(
@@ -1122,7 +1275,8 @@ export async function probeGeminiEnrichment(
 async function fetchOpenAIEnrichment(
   term: string,
   contextSentence?: string,
-  source?: string
+  source?: string,
+  timeoutMs: number = 6000
 ): Promise<LexicalEnrichmentPayload | null> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey || apiKey === 'your-openai-api-key') return null;
@@ -1135,7 +1289,7 @@ Include term, part_of_speech, phonetic, primary_definition, nuance_note, etymolo
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -1200,33 +1354,47 @@ export async function enrichWord(
   }
 
   const lang = languageOverride || detectLanguage(trimmed, contextSentence);
-  let failureReason: string | undefined;
+  const startedAt = Date.now();
 
-  // 1. Try Gemini
+  // 1. Try Gemini. Attempts share a 20s budget so a labeled fallback can still return inside maxDuration.
   const geminiRes = await fetchGeminiEnrichment(trimmed, contextSentence, source, lang);
   if (geminiRes.payload) {
     return geminiRes.payload;
   }
-  if (geminiRes.error) {
-    failureReason = `Gemini: ${geminiRes.error}`;
-  }
 
-  // 2. Try OpenAI (only for English)
-  if (lang === 'en') {
-    const openAiResult = await fetchOpenAIEnrichment(trimmed, contextSentence, source);
-    if (openAiResult) return openAiResult;
+  const geminiModel = geminiRes.model || 'none';
+  const geminiStatus = geminiRes.status ?? 'FAILED';
+  const geminiError = geminiRes.error || 'Gemini enrichment failed without an error message.';
+  const failureReason = `Gemini: ${geminiError}`;
+
+  // 2. Try OpenAI (only for English) when Gemini failed quickly enough to leave time.
+  const elapsedAfterGemini = Date.now() - startedAt;
+  if (lang === 'en' && elapsedAfterGemini < 18_000) {
+    const openAiBudget = Math.min(6000, Math.max(1500, 27_000 - elapsedAfterGemini));
+    const openAiResult = await fetchOpenAIEnrichment(trimmed, contextSentence, source, openAiBudget);
+    if (openAiResult) {
+      logEnrichmentFallback('openai', geminiModel, geminiStatus, geminiError);
+      return openAiResult;
+    }
   }
 
   // 3. Try Public Dictionary API for real definition (English only)
   let dictData: DictionaryApiResponse | null = null;
   if (lang === 'en') {
-    dictData = await fetchDictionaryFallback(trimmed);
+    const dictBudget = Math.min(3500, Math.max(0, 28_000 - (Date.now() - startedAt)));
+    if (dictBudget > 500) {
+      dictData = await fetchDictionaryFallback(trimmed, dictBudget);
+    }
   }
 
-  // 4. Fall back to intelligent lexical synthesizer (with verified dictionary data if available)
+  // 4. Fall back to curated lexicon or the morphological synthesizer.
   const fallback = synthesizeLexicalFallback(trimmed, contextSentence, source, dictData, lang);
-  if (failureReason) {
-    fallback.fallback_reason = failureReason;
-  }
+  fallback.fallback_reason = failureReason;
+  logEnrichmentFallback(
+    fallback.enrichment_source || 'fallback',
+    geminiModel,
+    geminiStatus,
+    geminiError
+  );
   return fallback;
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { LexicalEnrichmentSchema } from '@/lib/llm/schema';
 import {
   enrichWord,
@@ -8,6 +8,17 @@ import {
   extractJsonFromText,
   getGeminiApiKey,
   normalizeLexicalPayload,
+  fetchGeminiEnrichment,
+  geminiModelsToTry,
+  geminiGenerationConfig,
+  geminiAttemptTimeoutMs,
+  visibleGeminiModels,
+  GEMINI_PRIMARY_TIMEOUT_MS,
+  GEMINI_FALLBACK_TIMEOUT_MS,
+  GEMINI_ENRICHMENT_BUDGET_MS,
+  GEMINI_MAX_OUTPUT_TOKENS,
+  GEMINI_DEFAULT_MODEL,
+  GEMINI_FALLBACK_MODEL,
 } from '@/lib/llm/enricher';
 
 describe('Lexical Schema & Enrichment Engine (ING-02)', () => {
@@ -77,6 +88,10 @@ describe('Lexical Schema & Enrichment Engine (ING-02)', () => {
     expect(enriched.distinction_matrix).toBeDefined();
     expect(enriched.distinction_matrix?.synonyms).toContain('perspicacious');
     expect(enriched.distinction_matrix?.contextRecommendations.length).toBeGreaterThanOrEqual(2);
+    if (!getGeminiApiKey()) {
+      expect(enriched.is_fallback).toBe(true);
+      expect(enriched.enrichment_source).toBe('curated');
+    }
   });
 
   it('integrates user context sentence into source_context and cloze drills', async () => {
@@ -301,6 +316,176 @@ describe('Lexical Schema & Enrichment Engine (ING-02)', () => {
       expect(abnegacion.part_of_speech).toBe('noun');
       expect(abnegacion.gender).toBe('feminine');
       expect(abnegacion.etymology.roots.some((r) => r.morpheme === '-ción')).toBe(true);
+    });
+  });
+
+  describe('Gemini request budget and honest fallbacks', () => {
+    const envKeys = [
+      'GEMINI_API_KEY',
+      'GOOGLE_API_KEY',
+      'NEXT_PUBLIC_GEMINI_API_KEY',
+      'GOOGLE_AI_KEY',
+      'GEMINI_KEY',
+      'GEMINI_MODEL',
+    ] as const;
+    let restoreEnv: (() => void) | null = null;
+
+    afterEach(() => {
+      restoreEnv?.();
+      restoreEnv = null;
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it('labels a curated lexicon hit as a fallback', () => {
+      const curated = synthesizeLexicalFallback('perspicacious');
+      expect(curated.is_fallback).toBe(true);
+      expect(curated.enrichment_source).toBe('curated');
+      expect(curated.fallback_reason).toBeTruthy();
+    });
+
+    it('gives the primary model enough time for a structured reply and stays inside the route budget', () => {
+      expect(GEMINI_PRIMARY_TIMEOUT_MS).toBeGreaterThan(6500);
+      expect(GEMINI_FALLBACK_TIMEOUT_MS).toBeGreaterThan(0);
+      expect(GEMINI_PRIMARY_TIMEOUT_MS + GEMINI_FALLBACK_TIMEOUT_MS).toBeLessThanOrEqual(
+        GEMINI_ENRICHMENT_BUDGET_MS
+      );
+      expect(GEMINI_ENRICHMENT_BUDGET_MS).toBeLessThanOrEqual(20_000);
+      expect(GEMINI_MAX_OUTPUT_TOKENS).toBeGreaterThanOrEqual(4096);
+      expect(geminiAttemptTimeoutMs(0, 0)).toBe(GEMINI_PRIMARY_TIMEOUT_MS);
+      expect(geminiAttemptTimeoutMs(1, GEMINI_PRIMARY_TIMEOUT_MS)).toBe(GEMINI_FALLBACK_TIMEOUT_MS);
+      expect(geminiAttemptTimeoutMs(1, GEMINI_ENRICHMENT_BUDGET_MS)).toBe(0);
+    });
+
+    it('uses low thinking on Gemini 3 and disables thinking on Gemini 2.5', () => {
+      const primary = geminiGenerationConfig(GEMINI_DEFAULT_MODEL);
+      expect(primary.maxOutputTokens).toBe(GEMINI_MAX_OUTPUT_TOKENS);
+      expect(primary.responseMimeType).toBe('application/json');
+      expect(primary.thinkingConfig).toEqual({ thinkingLevel: 'low' });
+      expect(JSON.stringify(primary)).not.toContain('minimal');
+
+      const fallback = geminiGenerationConfig(GEMINI_FALLBACK_MODEL);
+      expect(fallback.thinkingConfig).toEqual({ thinkingBudget: 0 });
+      expect(fallback).not.toHaveProperty('thinkingConfig.thinkingLevel');
+      expect(JSON.stringify(fallback)).not.toContain('thinkingLevel');
+    });
+
+    it('tries the configured model first and keeps a different fallback model', () => {
+      expect(geminiModelsToTry(undefined)).toEqual([GEMINI_DEFAULT_MODEL, GEMINI_FALLBACK_MODEL]);
+      expect(geminiModelsToTry('gemini-3.8-flash')).toEqual([
+        'gemini-3.8-flash',
+        GEMINI_FALLBACK_MODEL,
+      ]);
+      expect(geminiModelsToTry('gemini-2.5-flash')).toEqual([
+        'gemini-2.5-flash',
+        GEMINI_DEFAULT_MODEL,
+      ]);
+      expect(geminiModelsToTry('models/gemini-3.8-flash')).toEqual([
+        'gemini-3.8-flash',
+        GEMINI_FALLBACK_MODEL,
+      ]);
+    });
+
+    it('does not hide the configured model when the catalog is long', () => {
+      const catalog = Array.from({ length: 12 }, (_, i) => `gemini-old-${i}`);
+      const visible = visibleGeminiModels(catalog, 'gemini-3.8-flash');
+      expect(visible[0]).toBe('gemini-3.8-flash');
+      expect(visible).toHaveLength(13);
+      expect(visible).toContain('gemini-old-11');
+      expect(visibleGeminiModels(['models/gemini-3.8-flash', 'gemini-2.5-flash'], 'gemini-3.8-flash')).toEqual([
+        'gemini-3.8-flash',
+        'gemini-2.5-flash',
+      ]);
+    });
+
+    it('logs an empty Gemini reply and retries the fallback model', async () => {
+      const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+      restoreEnv = () => {
+        for (const key of envKeys) {
+          const previous = previousEnv[key];
+          if (previous === undefined) delete process.env[key];
+          else process.env[key] = previous;
+        }
+      };
+      process.env.GEMINI_API_KEY = 'test-gemini-key-not-a-real-secret';
+      delete process.env.GEMINI_MODEL;
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const calls: { model: string; body: any }[] = [];
+
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          const model = url.match(/models\/([^:]+):/)?.[1] || '';
+          const body = JSON.parse(String(init?.body));
+          calls.push({ model, body });
+          if (model === 'gemini-3.8-flash') {
+            return new Response(
+              JSON.stringify({
+                candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [] } }],
+                usageMetadata: { thoughtsTokenCount: 8192 },
+              }),
+              { status: 200 }
+            );
+          }
+          return new Response(
+            JSON.stringify({
+              candidates: [
+                {
+                  finishReason: 'STOP',
+                  content: {
+                    parts: [
+                      {
+                        text: JSON.stringify({
+                          term: 'serendipity',
+                          part_of_speech: 'noun',
+                          primary_definition: 'The occurrence of happy accidents.',
+                          nuance_note: 'A pleasant surprise rather than mere luck.',
+                          etymology: {
+                            roots: [{ morpheme: 'Serendip', meaning: 'Sri Lanka', origin: 'Arabic' }],
+                            cognates: ['serendipitous'],
+                          },
+                          collocations: ['pure serendipity'],
+                          cloze_sentences: ['It was pure {{c1::serendipity}}.'],
+                          distinction_matrix: {
+                            synonyms: ['serendipity', 'chance'],
+                            nuanceComparison: 'Serendipity implies a happy discovery.',
+                            contextRecommendations: [
+                              {
+                                word: 'serendipity',
+                                recommendedRegister: 'Literary',
+                                exampleSentence: 'By serendipity she found the letter.',
+                              },
+                            ],
+                          },
+                        }),
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+            { status: 200 }
+          );
+        })
+      );
+
+      const result = await fetchGeminiEnrichment('serendipity');
+
+      expect(calls.map((call) => call.model)).toEqual(['gemini-3.8-flash', 'gemini-2.5-flash']);
+      expect(calls[0].body.generationConfig.thinkingConfig).toEqual({ thinkingLevel: 'low' });
+      expect(calls[0].body.generationConfig.maxOutputTokens).toBe(GEMINI_MAX_OUTPUT_TOKENS);
+      expect(calls[1].body.generationConfig.thinkingConfig).toEqual({ thinkingBudget: 0 });
+      expect(result.modelUsed).toBe('gemini-2.5-flash');
+      expect(result.payload?.is_fallback).toBe(false);
+      expect(result.payload?.enrichment_source).toBe('gemini');
+      expect(result.payload?.primary_definition).toContain('happy accidents');
+
+      const logged = errorSpy.mock.calls.map((args) => args.join(' ')).join('\n');
+      expect(logged).toContain('[Gemini enrichment] model=gemini-3.8-flash status=EMPTY');
+      expect(logged).toContain('finishReason=MAX_TOKENS');
+      expect(logged).not.toContain('test-gemini-key-not-a-real-secret');
     });
   });
 });
