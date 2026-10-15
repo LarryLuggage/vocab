@@ -10,7 +10,7 @@ import {
 import { GET as getReviewHandler, POST as postReviewHandler } from '@/app/api/review/route';
 import { POST as validateProductionHandler } from '@/app/api/validate-production/route';
 import { GET as exportHandler } from '@/app/api/export/route';
-import { GET as diagnosticHandler } from '@/app/api/diagnostic/route';
+import { GET as diagnosticHandler, resolveDiagnosticStatus } from '@/app/api/diagnostic/route';
 import { resetDbStore } from '@/lib/db';
 
 describe('Lexis Engine API Route Handlers', () => {
@@ -336,6 +336,43 @@ describe('Lexis Engine API Route Handlers', () => {
       expect(json.geminiProbe).toBeDefined();
       expect(json.dictionaryFallbackProbe).toBeDefined();
       expect(json.guidance).toBeDefined();
+      expect(json.enrichmentProbe.tested).toBe(false);
+      expect(json.enrichmentProbe.success).not.toBe(true);
+      expect(json.status).not.toBe('HEALTHY');
+    });
+
+    it('does not report enrichment as healthy when the generation test was skipped', () => {
+      const skipped = resolveDiagnosticStatus({
+        supabaseSuccess: true,
+        supabaseStatus: 'HEALTHY',
+        hasGeminiKey: true,
+        pingSuccess: true,
+        enrichmentTested: false,
+        enrichmentSuccess: false,
+      });
+      expect(skipped.status).toBe('ENRICHMENT_UNTESTED');
+      expect(skipped.guidance).toContain('/api/diagnostic?enrichment=true');
+
+      const failed = resolveDiagnosticStatus({
+        supabaseSuccess: true,
+        supabaseStatus: 'HEALTHY',
+        hasGeminiKey: true,
+        pingSuccess: true,
+        enrichmentTested: true,
+        enrichmentSuccess: false,
+        enrichmentError: 'timed out',
+      });
+      expect(failed.status).toBe('GEMINI_ENRICHMENT_FAILED');
+
+      const healthy = resolveDiagnosticStatus({
+        supabaseSuccess: true,
+        supabaseStatus: 'HEALTHY',
+        hasGeminiKey: true,
+        pingSuccess: true,
+        enrichmentTested: true,
+        enrichmentSuccess: true,
+      });
+      expect(healthy.status).toBe('HEALTHY');
     });
   });
 });
