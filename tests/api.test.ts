@@ -10,7 +10,8 @@ import {
 import { GET as getReviewHandler, POST as postReviewHandler } from '@/app/api/review/route';
 import { POST as validateProductionHandler } from '@/app/api/validate-production/route';
 import { GET as exportHandler } from '@/app/api/export/route';
-import { GET as diagnosticHandler, resolveDiagnosticStatus } from '@/app/api/diagnostic/route';
+import { GET as diagnosticHandler } from '@/app/api/diagnostic/route';
+import { resolveDiagnosticStatus } from '@/lib/diagnostic-status';
 import { resetDbStore } from '@/lib/db';
 
 describe('Lexis Engine API Route Handlers', () => {
