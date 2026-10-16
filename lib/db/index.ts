@@ -350,20 +350,60 @@ class LocalVocabStore {
     return true;
   }
 
-  public getDue(userId: string = DEFAULT_USER_ID, asOf: Date = new Date(), language?: string): CardWithSrs[] {
+  public getDue(
+    userId: string = DEFAULT_USER_ID,
+    asOf: Date = new Date(),
+    languageOrFilters?: string | ReviewQueueFilters
+  ): CardWithSrs[] {
+    const filters: ReviewQueueFilters =
+      typeof languageOrFilters === 'string'
+        ? { language: languageOrFilters }
+        : languageOrFilters || {};
+
     const dueTime = asOf.getTime();
-    const langClean = language?.toLowerCase().trim();
+    const langClean =
+      filters.language && filters.language.toLowerCase().trim() !== 'all'
+        ? filters.language.toLowerCase().trim()
+        : undefined;
+    const cardIdClean = filters.cardId?.trim();
+    const rootLower = filters.root?.toLowerCase().trim();
+    const rootClean = rootLower?.replace(/^-|-$/g, '');
+    const sourceLower = filters.source?.toLowerCase().trim();
+    const bypassDueCheck = Boolean(
+      filters.includeAll || cardIdClean || rootLower || sourceLower
+    );
+
     const dueCards: CardWithSrs[] = [];
 
     for (const card of this.cards.values()) {
       if (userId && card.user_id !== userId && card.user_id !== DEFAULT_USER_ID) continue;
       if (langClean && (card.language || 'en') !== langClean) continue;
-      const srs = this.srs.get(card.id);
-      if (srs) {
-        const cardDueDate = new Date(srs.due).getTime();
-        if (cardDueDate <= dueTime) {
-          dueCards.push({ ...card, srs });
-        }
+      if (cardIdClean && card.id !== cardIdClean) continue;
+
+      if (rootLower && rootClean) {
+        const matchesRoot = card.etymology.roots.some((r) => {
+          const mLower = r.morpheme.toLowerCase().trim();
+          const mClean = mLower.replace(/^-|-$/g, '');
+          return (
+            mLower.includes(rootLower) ||
+            (mClean.length > 0 && mClean.includes(rootClean)) ||
+            (mClean.length >= 2 && rootClean.includes(mClean)) ||
+            r.meaning.toLowerCase().includes(rootLower) ||
+            r.origin.toLowerCase() === rootLower
+          );
+        });
+        if (!matchesRoot) continue;
+      }
+
+      if (sourceLower) {
+        const srcMatch = card.source_context?.source?.toLowerCase().includes(sourceLower) ?? false;
+        const authorMatch = card.source_context?.author?.toLowerCase().includes(sourceLower) ?? false;
+        if (!srcMatch && !authorMatch) continue;
+      }
+
+      const srs = this.srs.get(card.id) || createInitialSrsCard(card.id, card.user_id);
+      if (bypassDueCheck || new Date(srs.due).getTime() <= dueTime) {
+        dueCards.push({ ...card, srs });
       }
     }
 
@@ -397,6 +437,17 @@ class LocalVocabStore {
 
   public getProductionLogs(cardId: string): ProductionLog[] {
     return this.productionLogs.filter(log => log.card_id === cardId);
+  }
+
+  public getAllProductionLogs(): Record<string, ProductionLog[]> {
+    const grouped: Record<string, ProductionLog[]> = {};
+    for (const log of this.productionLogs) {
+      if (!grouped[log.card_id]) {
+        grouped[log.card_id] = [];
+      }
+      grouped[log.card_id].push(log);
+    }
+    return grouped;
   }
 }
 
@@ -657,23 +708,54 @@ export async function deleteCard(
   return (data || []).length > 0;
 }
 
+export interface ReviewQueueFilters {
+  language?: string;
+  cardId?: string;
+  root?: string;
+  source?: string;
+  includeAll?: boolean;
+}
+
 export async function getDueCards(
   userId: string = DEFAULT_USER_ID,
   asOf: Date = new Date(),
-  language?: string
+  languageOrFilters?: string | ReviewQueueFilters
 ): Promise<CardWithSrs[]> {
   const supabase = getSupabaseClient();
-  if (!supabase) return memoryStore().getDue(userId, asOf, language);
+  if (!supabase) return memoryStore().getDue(userId, asOf, languageOrFilters);
 
-  const { data, error } = await supabase
+  const filters: ReviewQueueFilters =
+    typeof languageOrFilters === 'string'
+      ? { language: languageOrFilters }
+      : languageOrFilters || {};
+
+  const langClean =
+    filters.language && filters.language.toLowerCase().trim() !== 'all'
+      ? filters.language.toLowerCase().trim()
+      : undefined;
+  const cardIdClean = filters.cardId?.trim();
+  const rootLower = filters.root?.toLowerCase().trim();
+  const rootClean = rootLower?.replace(/^-|-$/g, '');
+  const sourceLower = filters.source?.toLowerCase().trim();
+  const bypassDueCheck = Boolean(
+    filters.includeAll || cardIdClean || rootLower || sourceLower
+  );
+
+  let query = supabase
     .from('srs_cards')
     .select('*, vocab:vocab_cards(*)')
-    .eq('user_id', userId)
-    .lte('due', asOf.toISOString())
-    .order('due', { ascending: true });
+    .eq('user_id', userId);
+
+  if (!bypassDueCheck) {
+    query = query.lte('due', asOf.toISOString());
+  }
+  if (cardIdClean) {
+    query = query.eq('card_id', cardIdClean);
+  }
+
+  const { data, error } = await query.order('due', { ascending: true });
   check(error, 'due queue');
 
-  const langClean = language?.toLowerCase().trim();
   let cards = (data || [])
     .map((item: any) => {
       const { vocab: rawVocab, ...srs } = item;
@@ -684,6 +766,28 @@ export async function getDueCards(
 
   if (langClean) {
     cards = cards.filter((c) => (c.language || 'en') === langClean);
+  }
+  if (rootLower && rootClean) {
+    cards = cards.filter((card) =>
+      card.etymology.roots.some((r) => {
+        const mLower = r.morpheme.toLowerCase().trim();
+        const mClean = mLower.replace(/^-|-$/g, '');
+        return (
+          mLower.includes(rootLower) ||
+          (mClean.length > 0 && mClean.includes(rootClean)) ||
+          (mClean.length >= 2 && rootClean.includes(mClean)) ||
+          r.meaning.toLowerCase().includes(rootLower) ||
+          r.origin.toLowerCase() === rootLower
+        );
+      })
+    );
+  }
+  if (sourceLower) {
+    cards = cards.filter(
+      (card) =>
+        (card.source_context?.source?.toLowerCase().includes(sourceLower) ?? false) ||
+        (card.source_context?.author?.toLowerCase().includes(sourceLower) ?? false)
+    );
   }
   return cards;
 }
@@ -755,4 +859,26 @@ export async function getProductionLogs(cardId: string): Promise<ProductionLog[]
     .order('created_at', { ascending: false });
   check(error, 'production log fetch');
   return (data || []) as ProductionLog[];
+}
+
+export async function listAllProductionLogs(
+  userId: string = DEFAULT_USER_ID
+): Promise<Record<string, ProductionLog[]>> {
+  const supabase = getSupabaseClient();
+  if (!supabase) return memoryStore().getAllProductionLogs();
+
+  const { data, error } = await supabase
+    .from('production_logs')
+    .select('*')
+    .order('created_at', { ascending: false });
+  check(error, 'production logs list');
+
+  const grouped: Record<string, ProductionLog[]> = {};
+  for (const log of (data || []) as ProductionLog[]) {
+    if (!grouped[log.card_id]) {
+      grouped[log.card_id] = [];
+    }
+    grouped[log.card_id].push(log);
+  }
+  return grouped;
 }

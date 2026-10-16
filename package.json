@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "db:seed": "node scripts/seed.mjs",
+    "build:curriculum": "node scripts/build-curriculum.mjs"
   },
   "dependencies": {
     "next": "^15.2.0",

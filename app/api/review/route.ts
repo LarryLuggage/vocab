@@ -12,10 +12,20 @@ export async function GET(req: NextRequest) {
     const asOf = asOfParam ? new Date(asOfParam) : new Date();
     const languageParam = searchParams.get('language') || undefined;
     const language = languageParam && languageParam !== 'all' ? languageParam : undefined;
+    const cardId = searchParams.get('cardId') || undefined;
+    const root = searchParams.get('root') || undefined;
+    const source = searchParams.get('source') || undefined;
+    const includeAll = searchParams.get('includeAll') === 'true';
     const limit = searchParams.get('limit') ? parseInt(searchParams.get('limit')!, 10) : undefined;
     const includePreviews = searchParams.get('includePreviews') === 'true';
 
-    let dueCards = await getDueCards(userId, asOf, language);
+    let dueCards = await getDueCards(userId, asOf, {
+      language,
+      cardId,
+      root,
+      source,
+      includeAll,
+    });
     if (limit) {
       dueCards = dueCards.slice(0, limit);
     }
@@ -34,6 +44,13 @@ export async function GET(req: NextRequest) {
       success: true,
       count: data.length,
       asOf: asOf.toISOString(),
+      filter: {
+        language: language || null,
+        cardId: cardId || null,
+        root: root || null,
+        source: source || null,
+        includeAll,
+      },
       data,
     });
   } catch (error: any) {

@@ -276,6 +276,40 @@ describe('Lexis Engine API Route Handlers', () => {
       expect(enJson.count).toBe(3);
       expect(enJson.data.every((c: any) => c.language === 'en')).toBe(true);
     });
+
+    it('supports targeted review by root, cardId, and source even when cards are due in the future', async () => {
+      // 'apocryphal' (00000000-0000-0000-0000-000000000004) is due tomorrow, so not in default queue
+      const rootReq = new NextRequest('http://localhost:3000/api/review?root=kryptein');
+      const rootRes = await getReviewHandler(rootReq);
+      expect(rootRes.status).toBe(200);
+      const rootJson = await rootRes.json();
+      expect(rootJson.success).toBe(true);
+      expect(rootJson.filter.root).toBe('kryptein');
+      expect(rootJson.count).toBe(1);
+      expect(rootJson.data[0].term).toBe('apocryphal');
+
+      // 'susurrus' (00000000-0000-0000-0000-000000000005) is due in 5 days
+      const cardIdReq = new NextRequest(
+        'http://localhost:3000/api/review?cardId=00000000-0000-0000-0000-000000000005'
+      );
+      const cardIdRes = await getReviewHandler(cardIdReq);
+      expect(cardIdRes.status).toBe(200);
+      const cardIdJson = await cardIdRes.json();
+      expect(cardIdJson.filter.cardId).toBe('00000000-0000-0000-0000-000000000005');
+      expect(cardIdJson.count).toBe(1);
+      expect(cardIdJson.data[0].term).toBe('susurrus');
+
+      // Filter by reading source ('Atlantic Review' -> susurrus)
+      const sourceReq = new NextRequest(
+        'http://localhost:3000/api/review?source=Atlantic%20Review'
+      );
+      const sourceRes = await getReviewHandler(sourceReq);
+      expect(sourceRes.status).toBe(200);
+      const sourceJson = await sourceRes.json();
+      expect(sourceJson.filter.source).toBe('Atlantic Review');
+      expect(sourceJson.count).toBe(1);
+      expect(sourceJson.data[0].term).toBe('susurrus');
+    });
   });
 
   describe('POST /api/validate-production', () => {
@@ -322,6 +356,39 @@ describe('Lexis Engine API Route Handlers', () => {
       expect(csvText).toContain('Term,Part of Speech');
       expect(csvText).toContain('"perspicacious"');
       expect(csvText).toContain('"solipsism"');
+    });
+
+    it('exports cards in Second-Brain Markdown format with YAML frontmatter, wikilinks, and production logs', async () => {
+      // Log a production sentence first so it appears in the Markdown export
+      const prodReq = new NextRequest('http://localhost:3000/api/validate-production', {
+        method: 'POST',
+        body: JSON.stringify({
+          term: 'perspicacious',
+          cardId: '00000000-0000-0000-0000-000000000001',
+          userSentence: 'Her perspicacious synthesis illuminated the archival fragments.',
+        }),
+      });
+      await validateProductionHandler(prodReq);
+
+      const req = new NextRequest('http://localhost:3000/api/export?format=markdown');
+      const res = await exportHandler(req);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Content-Type')).toContain('text/markdown');
+      expect(res.headers.get('Content-Disposition')).toContain('lexis_second_brain_');
+
+      const mdText = await res.text();
+      expect(mdText).toContain('---');
+      expect(mdText).toContain(
+        'title: "Lexis Engine — Personal Vocabulary & Etymology Knowledge Base"'
+      );
+      expect(mdText).toContain('## Morphological Root Index');
+      expect(mdText).toContain('[[perspicacious]]');
+      expect(mdText).toContain('[[specere]]');
+      expect(mdText).toContain('### perspicacious');
+      expect(mdText).toContain('Active Production Log:');
+      expect(mdText).toContain(
+        'Her perspicacious synthesis illuminated the archival fragments.'
+      );
     });
   });
 
