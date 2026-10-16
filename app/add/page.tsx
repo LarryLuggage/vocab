@@ -22,6 +22,20 @@ import { parseShareTargetPayload } from '@/lib/share-parser';
 import { detectLanguage, formatGenderBadge } from '@/lib/language';
 import { cn } from '@/lib/utils';
 
+function fallbackSourceLabel(source?: string | null): string {
+  switch (source) {
+    case 'dictionary':
+      return 'Dictionary Fallback';
+    case 'curated':
+      return 'Curated Fallback';
+    case 'offline-heuristic':
+    case 'offline-stub':
+      return 'Offline Fallback';
+    default:
+      return 'Fallback';
+  }
+}
+
 export default function QuickCapturePage() {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -603,11 +617,7 @@ export default function QuickCapturePage() {
             {previewCard.is_fallback ? (
               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-sans font-medium bg-amber-50 text-amber-900 border border-amber-300 self-start">
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-700" />
-                <span>
-                  {previewCard.enrichment_source === 'dictionary'
-                    ? 'Dictionary Fallback'
-                    : 'Offline Fallback'}
-                </span>
+                <span>{fallbackSourceLabel(previewCard.enrichment_source)}</span>
               </div>
             ) : finalLatency !== null ? (
               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-medium bg-emerald-50 text-emerald-800 border border-emerald-200 self-start">
@@ -627,7 +637,7 @@ export default function QuickCapturePage() {
                   : 'AI service offline or unconfigured on Vercel. Definition retrieved via factual dictionary fallback.'}
               </span>
               <a
-                href="/api/diagnostic"
+                href="/api/diagnostic?enrichment=true"
                 target="_blank"
                 rel="noreferrer"
                 className="underline font-semibold text-amber-900 shrink-0 hover:text-amber-700 inline-flex items-center gap-1"

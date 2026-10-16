@@ -28,6 +28,20 @@ import { getCardStateLabel } from '@/lib/fsrs';
 import { formatGenderBadge } from '@/lib/language';
 import { cn } from '@/lib/utils';
 
+function fallbackSourceLabel(source?: string | null): string {
+  switch (source) {
+    case 'dictionary':
+      return 'Dictionary Fallback';
+    case 'curated':
+      return 'Curated Fallback';
+    case 'offline-heuristic':
+    case 'offline-stub':
+      return 'Offline Fallback';
+    default:
+      return 'Fallback';
+  }
+}
+
 export default function LexiconPage() {
   const [cards, setCards] = useState<CardWithSrs[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -692,6 +706,12 @@ export default function LexiconPage() {
                           <span>Due for review</span>
                         </span>
                       )}
+                      {card.is_fallback && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-sans font-semibold bg-amber-50 text-amber-900 border border-amber-300">
+                          <AlertTriangle className="w-3 h-3" />
+                          {fallbackSourceLabel(card.enrichment_source)}
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -826,8 +846,15 @@ export default function LexiconPage() {
                             </span>
                           )}
                         </div>
-                        <span className="text-[10px] font-sans px-2 py-0.5 rounded bg-stone-200/60 text-stone-700">
-                          {card.part_of_speech}
+                        <span className="flex items-center gap-1">
+                          {card.is_fallback && (
+                            <span className="text-[10px] font-sans px-1.5 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-300">
+                              {fallbackSourceLabel(card.enrichment_source)}
+                            </span>
+                          )}
+                          <span className="text-[10px] font-sans px-2 py-0.5 rounded bg-stone-200/60 text-stone-700">
+                            {card.part_of_speech}
+                          </span>
                         </span>
                       </div>
                       <p className="text-xs font-serif text-stone-600 line-clamp-2">

@@ -1,6 +1,13 @@
 import { NextResponse } from 'next/server';
-import { getGeminiApiKey, probeGeminiEnrichment } from '@/lib/llm/enricher';
+import {
+  GEMINI_DEFAULT_MODEL,
+  geminiModelsToTry,
+  getGeminiApiKey,
+  probeGeminiEnrichment,
+  visibleGeminiModels,
+} from '@/lib/llm/enricher';
 import { createClient } from '@supabase/supabase-js';
+import { resolveDiagnosticStatus } from '@/lib/diagnostic-status';
 
 export const maxDuration = 30;
 export const dynamic = 'force-dynamic';
@@ -161,7 +168,7 @@ export async function GET(req: Request) {
       GEMINI_KEY: Boolean(rawGeminiKeyEnv),
       GOOGLE_AI_KEY: Boolean(rawGoogleAiKey),
     },
-    configuredModel: process.env.GEMINI_MODEL || 'gemini-3.8-flash (default)',
+    configuredModel: process.env.GEMINI_MODEL?.trim() || `${GEMINI_DEFAULT_MODEL} (default)`,
     supabaseProbe: supabaseProbe.info,
     authGated: Boolean(secretToken),
     secretTokenLength: secretToken ? secretToken.length : 0,
@@ -193,11 +200,7 @@ export async function GET(req: Request) {
       // ignore
     }
 
-    const candidateModels = [
-      process.env.GEMINI_MODEL,
-      'gemini-3.8-flash',
-    ].filter(Boolean) as string[];
-    const uniqueModels = Array.from(new Set(candidateModels));
+    const uniqueModels = geminiModelsToTry(process.env.GEMINI_MODEL);
 
     const modelTests: Record<string, any> = {};
 
@@ -246,34 +249,47 @@ export async function GET(req: Request) {
     );
 
     const anySuccess = Object.values(modelTests).some((m: any) => m.success);
+    const configuredModel = process.env.GEMINI_MODEL?.trim() || GEMINI_DEFAULT_MODEL;
     geminiProbeResult = {
       tested: true,
       overallSuccess: anySuccess,
-      availableModelsFromGoogle: availableFromGoogle.slice(0, 10),
+      configuredModel,
+      enrichmentModels: uniqueModels,
+      availableModelsFromGoogle: visibleGeminiModels(availableFromGoogle, configuredModel),
       models: modelTests,
     };
   }
 
-    let testEnrichment = false;
-    if (req?.url) {
-      try {
-        const parsedUrl = new URL(req.url);
-        testEnrichment = parsedUrl.searchParams.get('enrichment') === 'true';
-      } catch {
-        // ignore
-      }
+  let testEnrichment = false;
+  if (req?.url) {
+    try {
+      const parsedUrl = new URL(req.url);
+      testEnrichment = parsedUrl.searchParams.get('enrichment') === 'true';
+    } catch {
+      // ignore
     }
+  }
 
-    // Live End-to-End Lexical Enrichment Probe (optional via ?enrichment=true or omitted for instant healthcheck)
-    const enrichmentProbe = (geminiKey && testEnrichment)
-      ? await probeGeminiEnrichment(geminiKey, 'perspicacious')
-      : {
-          tested: Boolean(testEnrichment),
-          success: true,
-          latencyMs: 0,
-          error: undefined as string | null | undefined,
-          note: testEnrichment ? undefined : 'Skipped full generation for fast diagnostic response (pass ?enrichment=true to test).',
-        };
+  // Full generation is opt-in. A skipped test must not report success.
+  const enrichmentProbe = !testEnrichment
+    ? {
+        tested: false,
+        success: null as boolean | null,
+        skipped: true,
+        latencyMs: null as number | null,
+        error: null as string | null,
+        note: 'Lexical enrichment was not tested. Pass ?enrichment=true to run a real generation. This check does not mean enrichment is healthy.',
+      }
+    : !geminiKey
+    ? {
+        tested: false,
+        success: false as boolean | null,
+        skipped: false,
+        latencyMs: null as number | null,
+        error: 'No Gemini API key available to test enrichment.',
+        note: null as string | null,
+      }
+    : await probeGeminiEnrichment(geminiKey, 'perspicacious');
 
   // Probe Public Dictionary Fallback API
   let dictionaryProbe = { success: false };
@@ -286,25 +302,16 @@ export async function GET(req: Request) {
     dictionaryProbe = { success: false };
   }
 
-  // Determine Overall Status
-  let overallStatus = 'HEALTHY';
-  let guidance = 'All systems operational.';
-
-  if (!supabaseProbe.success) {
-    overallStatus = supabaseProbe.status;
-    guidance = supabaseProbe.guidance || 'Database configuration issue detected.';
-  } else if (!geminiKey) {
-    overallStatus = 'MISSING_GEMINI_KEY';
-    guidance =
-      'GEMINI_API_KEY is not available to this deployment. In Vercel Project Settings -> Environment Variables, add GEMINI_API_KEY for Production, then redeploy.';
-  } else if (!geminiProbeResult.overallSuccess) {
-    overallStatus = 'GEMINI_KEY_ERROR';
-    guidance =
-      'Google Gemini API rejected the request. Inspect geminiProbe.models for the exact error code from Google.';
-  } else if (enrichmentProbe.tested && !enrichmentProbe.success) {
-    overallStatus = 'GEMINI_ENRICHMENT_FAILED';
-    guidance = `Gemini responded to ping but lexical enrichment failed: ${enrichmentProbe.error || 'schema or timeout error'}`;
-  }
+  const { status: overallStatus, guidance } = resolveDiagnosticStatus({
+    supabaseSuccess: supabaseProbe.success,
+    supabaseStatus: supabaseProbe.status,
+    supabaseGuidance: supabaseProbe.guidance,
+    hasGeminiKey: Boolean(geminiKey),
+    pingSuccess: Boolean(geminiProbeResult.overallSuccess),
+    enrichmentTested: enrichmentProbe.tested === true,
+    enrichmentSuccess: enrichmentProbe.success === true,
+    enrichmentError: enrichmentProbe.error,
+  });
 
   return NextResponse.json(
     {
