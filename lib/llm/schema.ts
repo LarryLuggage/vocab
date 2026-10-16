@@ -21,8 +21,11 @@ export const EtymologySchema = z.object({
 });
 
 export const SourceContextSchema = z.object({
-  sentence: z.string().nullable().optional().default(null),
-  source: z.string().nullable().optional().default(null),
+  sentence: z.string().nullable().optional(),
+  source: z.string().nullable().optional(),
+  author: z.string().nullable().optional(),
+  page: z.string().nullable().optional(),
+  url: z.string().nullable().optional(),
 });
 
 export const DistinctionMatrixItemSchema = z.object({

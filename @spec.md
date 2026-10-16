@@ -149,8 +149,8 @@ CREATE INDEX IF NOT EXISTS idx_vocab_term ON vocab_cards (term);
     - Academic citation parser (`lib/zotero-parser.ts`) extracting author, title, and page numbers from academic annotations.
     - Native Zotero 7 desktop action script (`@docs/zotero-setup.md`) for 1-click bibliographic capture.
 
-- **Phase 3: Knowledge Graph & Second-Brain Sync (Upcoming)**:
-  - Interactive Morpheme Root Network visualizer on `/lexicon` (interactive SVG/canvas cluster graph linking words sharing Greek/Latin roots).
-  - Obsidian & Markdown bulk export / sync endpoint (`/api/export?format=markdown`) with YAML frontmatter for personal knowledge bases and NotebookLM.
-  - Morpheme-based practice filter (focus review drills on specific etymological clusters).
-  - Offline PWA caching with Service Worker.
+- **Phase 3: Knowledge Graph & Second-Brain Sync (Complete)**:
+  - Interactive Morpheme Root Network visualizer on `/lexicon` (`components/MorphemeGraph.tsx` — interactive SVG cluster graph linking words sharing Greek, Latin, and Andalusi Arabic roots and cognates).
+  - Obsidian & NotebookLM Markdown bulk export endpoint (`/api/export?format=markdown`) with YAML frontmatter, `[[wikilinks]]`, and active production sentence logs (`lib/export-markdown.ts`).
+  - Targeted morpheme, card, and reading-source practice filters (`/review?root=...`, `/review?cardId=...`, `/review?source=...`).
+  - Offline PWA manifest and mobile installability.

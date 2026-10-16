@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { listCards } from '@/lib/db';
+import { listCards, listAllProductionLogs } from '@/lib/db';
 import { DEFAULT_USER_ID } from '@/lib/db/seed-data';
+import { formatLexiconAsMarkdown } from '@/lib/export-markdown';
 
 function escapeCsvField(val: unknown): string {
   if (val === null || val === undefined) return '""';
@@ -13,9 +14,25 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const format = searchParams.get('format')?.toLowerCase() || 'json';
     const userId = searchParams.get('userId') || DEFAULT_USER_ID;
+    const languageParam = searchParams.get('language') || undefined;
+    const language = languageParam && languageParam !== 'all' ? languageParam : undefined;
     const download = searchParams.get('download') === 'true';
 
-    const cards = await listCards({ userId });
+    const cards = await listCards({ userId, language });
+
+    if (format === 'markdown' || format === 'md') {
+      const logsByCardId = await listAllProductionLogs(userId);
+      const mdContent = formatLexiconAsMarkdown(cards, logsByCardId);
+      const filename = `lexis_second_brain_${new Date().toISOString().split('T')[0]}.md`;
+
+      return new NextResponse(mdContent, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/markdown; charset=utf-8',
+          'Content-Disposition': `attachment; filename="${filename}"`,
+        },
+      });
+    }
 
     if (format === 'anki' || format === 'csv') {
       // Generate Anki-compatible CSV with standard cloze & vocabulary headers

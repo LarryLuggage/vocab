@@ -18,8 +18,11 @@ import {
   BookOpen,
   CheckCircle,
   AlertTriangle,
+  FileText,
+  Network,
 } from 'lucide-react';
 import { CardWithSrs, FSRSState } from '@/types/lexis';
+import { MorphemeGraph } from '@/components/MorphemeGraph';
 import { apiFetch, errorMessageOf, CARDS_UPDATED_EVENT } from '@/lib/api-client';
 import { getCardStateLabel } from '@/lib/fsrs';
 import { formatGenderBadge } from '@/lib/language';
@@ -31,7 +34,7 @@ export default function LexiconPage() {
   const [selectedLanguage, setSelectedLanguage] = useState<'all' | 'en' | 'es'>('all');
   const [selectedTier, setSelectedTier] = useState<number | 'all'>('all');
   const [selectedOrigin, setSelectedOrigin] = useState<string | 'all'>('all');
-  const [viewMode, setViewMode] = useState<'catalog' | 'roots'>('catalog');
+  const [viewMode, setViewMode] = useState<'catalog' | 'roots' | 'network'>('catalog');
   const [exportNotification, setExportNotification] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -43,6 +46,10 @@ export default function LexiconPage() {
       const searchParam = params.get('search') || params.get('q') || params.get('term');
       if (searchParam) {
         setSearchQuery(searchParam);
+      }
+      const viewParam = params.get('view');
+      if (viewParam === 'network' || viewParam === 'roots' || viewParam === 'catalog') {
+        setViewMode(viewParam);
       }
     }
 
@@ -225,6 +232,31 @@ export default function LexiconPage() {
     setTimeout(() => setExportNotification(null), 4000);
   };
 
+  // Export Second-Brain Markdown
+  const handleExportMarkdown = async () => {
+    try {
+      const res = await fetch('/api/export?format=markdown&download=true');
+      if (!res.ok) {
+        throw new Error('Failed to generate Markdown export');
+      }
+      const mdContent = await res.text();
+      const blob = new Blob([mdContent], { type: 'text/markdown;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `lexis-second-brain-${new Date().toISOString().slice(0, 10)}.md`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      setExportNotification('Exported Second-Brain Markdown for Obsidian & NotebookLM.');
+      setTimeout(() => setExportNotification(null), 4000);
+    } catch (err) {
+      setLoadError(errorMessageOf(err, 'Failed to export Markdown.'));
+    }
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
       {/* Top Editorial Header & Stats */}
@@ -244,7 +276,16 @@ export default function LexiconPage() {
         </div>
 
         {/* Portability / Export Buttons */}
-        <div className="flex items-center gap-2 self-start md:self-end">
+        <div className="flex items-center gap-2 flex-wrap self-start md:self-end">
+          <button
+            type="button"
+            onClick={handleExportMarkdown}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-stone-300 bg-white hover:bg-stone-50 text-xs font-sans font-medium text-stone-700 transition-colors shadow-sm"
+          >
+            <FileText className="w-3.5 h-3.5 text-[#834832]" />
+            <span>Export Markdown</span>
+          </button>
+
           <button
             type="button"
             onClick={handleExportJSON}
@@ -420,7 +461,7 @@ export default function LexiconPage() {
           </div>
 
           {/* View Mode Toggle */}
-          <div className="flex items-center rounded-xl border border-stone-200 p-1 bg-stone-50 self-start sm:self-auto">
+          <div className="flex items-center rounded-xl border border-stone-200 p-1 bg-stone-50 self-start sm:self-auto flex-wrap">
             <button
               type="button"
               onClick={() => setViewMode('catalog')}
@@ -446,6 +487,19 @@ export default function LexiconPage() {
             >
               <GitBranch className="w-3.5 h-3.5" />
               <span>Etymological Roots</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('network')}
+              className={cn(
+                'px-3 py-1.5 rounded-lg text-xs font-sans font-medium transition-all flex items-center gap-1.5',
+                viewMode === 'network'
+                  ? 'bg-white shadow-xs text-stone-900 font-semibold'
+                  : 'text-stone-600 hover:text-stone-900'
+              )}
+            >
+              <Network className="w-3.5 h-3.5" />
+              <span>Root Network</span>
             </button>
           </div>
         </div>
@@ -701,7 +755,7 @@ export default function LexiconPage() {
                   </div>
 
                   <Link
-                    href="/review"
+                    href={`/review?cardId=${encodeURIComponent(card.id)}`}
                     className="inline-flex items-center gap-1 text-[#834832] font-semibold hover:text-[#693522] group-hover:translate-x-0.5 transition-transform"
                   >
                     <span>Practice Drill</span>
@@ -712,72 +766,88 @@ export default function LexiconPage() {
             );
           })}
         </div>
-      ) : (
+      ) : viewMode === 'roots' ? (
         /* --- VIEW 2: MORPHOLOGICAL ROOTS GROUPING --- */
         <div className="space-y-6">
-          {rootGroups.map(([rootKey, data], idx) => (
-            <div
-              key={idx}
-              className="bg-white border border-[#e7e5e4] rounded-2xl p-6 shadow-sm space-y-4"
-            >
-              {/* Root Family Header */}
-              <div className="flex items-baseline justify-between border-b border-stone-100 pb-3">
-                <div className="flex items-baseline gap-3">
-                  <span className="px-2 py-0.5 rounded bg-stone-100 text-stone-800 font-mono text-xs font-bold uppercase">
-                    {data.origin}
-                  </span>
-                  <h3 className="text-xl font-serif font-bold text-[#1c1917] italic">
-                    {rootKey.split(' ')[0]}
-                  </h3>
-                  <span className="text-sm font-sans text-[#78716c]">
-                    meaning: “{data.meaning}”
-                  </span>
+          {rootGroups.map(([rootKey, data], idx) => {
+            const cleanMorpheme = rootKey.split(' ')[0];
+            return (
+              <div
+                key={idx}
+                className="bg-white border border-[#e7e5e4] rounded-2xl p-6 shadow-sm space-y-4"
+              >
+                {/* Root Family Header */}
+                <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-stone-100 pb-3">
+                  <div className="flex items-baseline gap-3 flex-wrap">
+                    <span className="px-2 py-0.5 rounded bg-stone-100 text-stone-800 font-mono text-xs font-bold uppercase">
+                      {data.origin}
+                    </span>
+                    <h3 className="text-xl font-serif font-bold text-[#1c1917] italic">
+                      {cleanMorpheme}
+                    </h3>
+                    <span className="text-sm font-sans text-[#78716c]">
+                      meaning: “{data.meaning}”
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-sans font-semibold text-[#834832] bg-[#834832]/10 px-2.5 py-0.5 rounded-full">
+                      {data.cards.length} {data.cards.length === 1 ? 'word' : 'words'}
+                    </span>
+                    <Link
+                      href={`/review?root=${encodeURIComponent(cleanMorpheme)}`}
+                      className="inline-flex items-center gap-1 text-xs font-sans font-semibold text-[#834832] hover:text-[#693522] px-2.5 py-0.5 rounded-full border border-[#834832]/30 hover:bg-[#fdf8f6] transition-colors"
+                    >
+                      <span>Drill Root Cluster</span>
+                      <ArrowRight className="w-3 h-3" />
+                    </Link>
+                  </div>
                 </div>
 
-                <span className="text-xs font-sans font-semibold text-[#834832] bg-[#834832]/10 px-2.5 py-0.5 rounded-full">
-                  {data.cards.length} {data.cards.length === 1 ? 'word' : 'words'}
-                </span>
-              </div>
-
-              {/* Connected Words in this Morpheme Family */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {data.cards.map((card) => (
-                  <div
-                    key={card.id}
-                    className="p-3.5 rounded-xl border border-stone-200 bg-[#fdf8f6]/50 space-y-1.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="font-serif font-bold text-base text-[#1c1917] capitalize">
-                          {card.term}
-                        </span>
-                        <span className="text-[10px] font-sans px-1.5 py-0.5 rounded bg-stone-100 text-stone-700">
-                          {(card.language || 'en') === 'es' ? '🇪🇸' : '🇬🇧'}
-                        </span>
-                        {(card.language || 'en') === 'es' && card.gender && (
-                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-100 text-amber-900">
-                            {formatGenderBadge(card.gender, card.part_of_speech)?.article || card.gender}
+                {/* Connected Words in this Morpheme Family */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {data.cards.map((card) => (
+                    <Link
+                      key={card.id}
+                      href={`/review?cardId=${encodeURIComponent(card.id)}`}
+                      className="p-3.5 rounded-xl border border-stone-200 hover:border-[#834832] bg-[#fdf8f6]/50 hover:bg-[#fdf8f6] transition-all space-y-1.5 block group"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-serif font-bold text-base text-[#1c1917] group-hover:text-[#834832] capitalize">
+                            {card.term}
                           </span>
-                        )}
+                          <span className="text-[10px] font-sans px-1.5 py-0.5 rounded bg-stone-100 text-stone-700">
+                            {(card.language || 'en') === 'es' ? '🇪🇸' : '🇬🇧'}
+                          </span>
+                          {(card.language || 'en') === 'es' && card.gender && (
+                            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-100 text-amber-900">
+                              {formatGenderBadge(card.gender, card.part_of_speech)?.article || card.gender}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] font-sans px-2 py-0.5 rounded bg-stone-200/60 text-stone-700">
+                          {card.part_of_speech}
+                        </span>
                       </div>
-                      <span className="text-[10px] font-sans px-2 py-0.5 rounded bg-stone-200/60 text-stone-700">
-                        {card.part_of_speech}
-                      </span>
-                    </div>
-                    <p className="text-xs font-serif text-stone-600 line-clamp-2">
-                      {card.primary_definition}
-                    </p>
-                    {card.english_gloss && (
-                      <p className="text-[11px] font-serif italic text-[#0369a1] line-clamp-1">
-                        Anchor: “{card.english_gloss}”
+                      <p className="text-xs font-serif text-stone-600 line-clamp-2">
+                        {card.primary_definition}
                       </p>
-                    )}
-                  </div>
-                ))}
+                      {card.english_gloss && (
+                        <p className="text-[11px] font-serif italic text-[#0369a1] line-clamp-1">
+                          Anchor: “{card.english_gloss}”
+                        </p>
+                      )}
+                    </Link>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
+      ) : (
+        /* --- VIEW 3: INTERACTIVE MORPHEME NETWORK GRAPH --- */
+        <MorphemeGraph cards={filteredCards} />
       )}
     </div>
   );

@@ -190,6 +190,43 @@ export default function ReviewPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSavingRating, setIsSavingRating] = useState(false);
   const [ratingError, setRatingError] = useState<string | null>(null);
+  const [activeFilter, setActiveFilter] = useState<{
+    cardId?: string;
+    root?: string;
+    source?: string;
+  } | null>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const cardId = params.get('cardId') || undefined;
+      const root = params.get('root') || undefined;
+      const source = params.get('source') || undefined;
+      if (cardId || root || source) {
+        return { cardId, root, source };
+      }
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const cardId = params.get('cardId') || undefined;
+      const root = params.get('root') || undefined;
+      const source = params.get('source') || undefined;
+      if (cardId || root || source) {
+        setActiveFilter((prev) => {
+          if (
+            prev?.cardId === cardId &&
+            prev?.root === root &&
+            prev?.source === source
+          ) {
+            return prev;
+          }
+          return { cardId, root, source };
+        });
+      }
+    }
+  }, []);
 
   // Queue Counts for Language Filter Pills
   const languageCounts = useMemo(() => {
@@ -247,21 +284,49 @@ export default function ReviewPage() {
     }
   }, []);
 
-  // Load the due queue (or every card, for drill-all) from the server
-  const refreshQueue = useCallback(async (includeAll: boolean = false) => {
-    setIsLoadingQueue(true);
-    setLoadError(null);
-    try {
-      const res = await apiFetch<{ data: CardWithSrs[] }>(includeAll ? '/api/cards' : '/api/review');
-      setRawQueue(res.data);
-      setCurrentIndex(0);
-      setSessionCompleted(res.data.length === 0);
-    } catch (err) {
-      setLoadError(errorMessageOf(err, 'Failed to load the review queue.'));
-    } finally {
-      setIsLoadingQueue(false);
+  // Load the due queue (or every card, for drill-all, or targeted filter) from the server
+  const refreshQueue = useCallback(
+    async (
+      includeAll: boolean = false,
+      filterOverride?: { cardId?: string; root?: string; source?: string } | null
+    ) => {
+      setIsLoadingQueue(true);
+      setLoadError(null);
+      try {
+        const effectiveFilter =
+          filterOverride !== undefined ? filterOverride : activeFilter;
+        let endpoint = includeAll ? '/api/cards' : '/api/review';
+        if (!includeAll && effectiveFilter) {
+          const qs = new URLSearchParams();
+          if (effectiveFilter.cardId) qs.set('cardId', effectiveFilter.cardId);
+          if (effectiveFilter.root) qs.set('root', effectiveFilter.root);
+          if (effectiveFilter.source) qs.set('source', effectiveFilter.source);
+          const queryStr = qs.toString();
+          if (queryStr) {
+            endpoint = `/api/review?${queryStr}`;
+          }
+        }
+        const res = await apiFetch<{ data: CardWithSrs[] }>(endpoint);
+        setRawQueue(res.data);
+        setCurrentIndex(0);
+        setSessionCompleted(res.data.length === 0);
+      } catch (err) {
+        setLoadError(errorMessageOf(err, 'Failed to load the review queue.'));
+      } finally {
+        setIsLoadingQueue(false);
+      }
+    },
+    [activeFilter]
+  );
+
+  const handleExitFocusedDrill = useCallback(() => {
+    setActiveFilter(null);
+    setDrillAll(false);
+    if (typeof window !== 'undefined') {
+      window.history.replaceState({}, '', '/review');
     }
-  }, []);
+    refreshQueue(false, null);
+  }, [refreshQueue]);
 
   useEffect(() => {
     refreshQueue(drillAll);
@@ -651,6 +716,33 @@ export default function ReviewPage() {
 
   return (
     <div className="max-w-3xl mx-auto space-y-6 animate-in fade-in duration-300">
+      {/* Targeted Drill Banner */}
+      {activeFilter && (
+        <div className="bg-[#fdf8f6] border border-[#eaddd7] rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-2.5 text-xs font-sans text-[#4f2416]">
+            <GitBranch className="w-4 h-4 text-[#834832] shrink-0" />
+            <span className="font-semibold">
+              {activeFilter.root
+                ? `Focused Morpheme Cluster Drill: "${activeFilter.root}" (${queue.length} ${
+                    queue.length === 1 ? 'card' : 'cards'
+                  })`
+                : activeFilter.cardId
+                ? `Focused Word Drill: "${currentCard?.term || 'Selected Card'}"`
+                : `Focused Source Drill: "${activeFilter.source}" (${queue.length} ${
+                    queue.length === 1 ? 'card' : 'cards'
+                  })`}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={handleExitFocusedDrill}
+            className="self-start sm:self-auto px-3 py-1.5 rounded-xl bg-white hover:bg-stone-50 border border-[#eaddd7] text-[#834832] text-xs font-sans font-semibold transition-colors shadow-2xs cursor-pointer"
+          >
+            Exit Focused Drill
+          </button>
+        </div>
+      )}
+
       {/* Top Header: Queue Manager & Progress */}
       <div className="space-y-3">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-sans">
