@@ -255,7 +255,20 @@ class LocalVocabStore {
         const matchesRoots = card.etymology.roots.some(
           r => r.morpheme.toLowerCase().includes(search) || r.meaning.toLowerCase().includes(search)
         );
-        if (!matchesTerm && !matchesDef && !matchesNuance && !matchesGloss && !matchesRoots) {
+        const matchesAuthor = card.source_context?.author?.toLowerCase().includes(search) ?? false;
+        const matchesSource = card.source_context?.source?.toLowerCase().includes(search) ?? false;
+        const matchesSentence =
+          card.source_context?.sentence?.toLowerCase().includes(search) ?? false;
+        if (
+          !matchesTerm &&
+          !matchesDef &&
+          !matchesNuance &&
+          !matchesGloss &&
+          !matchesRoots &&
+          !matchesAuthor &&
+          !matchesSource &&
+          !matchesSentence
+        ) {
           continue;
         }
       }
