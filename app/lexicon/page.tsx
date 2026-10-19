@@ -24,11 +24,14 @@ import {
   BookMarked,
   SlidersHorizontal,
   Eye,
+  BarChart3,
+  RefreshCw,
 } from 'lucide-react';
 import { CardWithSrs, FSRSState } from '@/types/lexis';
 import { MorphemeGraph } from '@/components/MorphemeGraph';
+import { RetentionAnalytics } from '@/components/RetentionAnalytics';
 import { CardInspectorDrawer } from '@/components/CardInspectorDrawer';
-import { apiFetch, errorMessageOf, CARDS_UPDATED_EVENT } from '@/lib/api-client';
+import { apiFetch, errorMessageOf, CARDS_UPDATED_EVENT, notifyCardsUpdated } from '@/lib/api-client';
 import { getCardStateLabel } from '@/lib/fsrs';
 import { formatGenderBadge } from '@/lib/language';
 import { cn } from '@/lib/utils';
@@ -53,9 +56,10 @@ export default function LexiconPage() {
   const [selectedLanguage, setSelectedLanguage] = useState<'all' | 'en' | 'es'>('all');
   const [selectedTier, setSelectedTier] = useState<number | 'all'>('all');
   const [selectedOrigin, setSelectedOrigin] = useState<string | 'all'>('all');
-  const [viewMode, setViewMode] = useState<'catalog' | 'roots' | 'sources' | 'network'>('catalog');
+  const [viewMode, setViewMode] = useState<'catalog' | 'roots' | 'sources' | 'network' | 'analytics'>('catalog');
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [exportNotification, setExportNotification] = useState<string | null>(null);
+  const [isSeedingPack, setIsSeedingPack] = useState<'es-literary' | 'en-philosophical' | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -72,7 +76,8 @@ export default function LexiconPage() {
         viewParam === 'network' ||
         viewParam === 'roots' ||
         viewParam === 'sources' ||
-        viewParam === 'catalog'
+        viewParam === 'catalog' ||
+        viewParam === 'analytics'
       ) {
         setViewMode(viewParam);
       }
@@ -337,6 +342,42 @@ export default function LexiconPage() {
     }
   };
 
+  // Seed Curated Pack (Spanish Literary or English Philosophical)
+  const handleSeedPack = async (pack: 'es-literary' | 'en-philosophical') => {
+    if (isSeedingPack) return;
+    setIsSeedingPack(pack);
+    setLoadError(null);
+    try {
+      const rawRes = await apiFetch<any>('/api/cards/seed', {
+        method: 'POST',
+        body: JSON.stringify({ pack }),
+      });
+      const res =
+        rawRes && typeof rawRes === 'object' && 'data' in rawRes && rawRes.data
+          ? rawRes.data
+          : rawRes;
+      notifyCardsUpdated();
+      const updatedPayload = await apiFetch<{ data: CardWithSrs[] }>('/api/cards');
+      setCards(updatedPayload.data);
+      const added = res?.added ?? 0;
+      const total = res?.total ?? updatedPayload.data.length;
+      if (pack === 'es-literary') {
+        setExportNotification(
+          `Loaded Spanish Literary Pack (+${added} new words, ${total} total).`
+        );
+      } else {
+        setExportNotification(
+          `Loaded Philosophical Curriculum (+${added} new words, ${total} total).`
+        );
+      }
+      setTimeout(() => setExportNotification(null), 5000);
+    } catch (err) {
+      setLoadError(errorMessageOf(err, 'Failed to seed curated vocabulary pack.'));
+    } finally {
+      setIsSeedingPack(null);
+    }
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
       {/* Top Editorial Header & Stats */}
@@ -355,34 +396,70 @@ export default function LexiconPage() {
           </p>
         </div>
 
-        {/* Portability / Export Buttons */}
-        <div className="flex items-center gap-2 flex-wrap self-start md:self-end">
-          <button
-            type="button"
-            onClick={handleExportMarkdown}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-stone-300 bg-white hover:bg-stone-50 text-xs font-sans font-medium text-stone-700 transition-colors shadow-sm"
-          >
-            <FileText className="w-3.5 h-3.5 text-[#834832]" />
-            <span>Export Markdown</span>
-          </button>
+        {/* Curated Pack Loader & Portability / Export Buttons */}
+        <div className="flex flex-col sm:items-end gap-2.5 self-start md:self-end">
+          {/* Curated Pack Loader Pill Group */}
+          <div className="flex items-center gap-1.5 flex-wrap bg-[#fdf8f6] border border-[#eaddd7] rounded-xl p-1.5 shadow-2xs">
+            <span className="px-2 text-[11px] font-sans font-semibold uppercase tracking-wider text-[#834832] flex items-center gap-1">
+              <Sparkles className="w-3 h-3" />
+              <span>Load Curated Pack:</span>
+            </span>
+            <button
+              type="button"
+              disabled={isSeedingPack !== null}
+              onClick={() => handleSeedPack('es-literary')}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white hover:bg-amber-50 border border-[#eaddd7] text-xs font-sans font-semibold text-[#1c1917] transition-colors shadow-2xs disabled:opacity-50 cursor-pointer"
+            >
+              {isSeedingPack === 'es-literary' ? (
+                <RefreshCw className="w-3 h-3 animate-spin text-[#834832]" />
+              ) : (
+                <span>🇪🇸</span>
+              )}
+              <span>Seed 25 Spanish Literary</span>
+            </button>
+            <button
+              type="button"
+              disabled={isSeedingPack !== null}
+              onClick={() => handleSeedPack('en-philosophical')}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white hover:bg-stone-50 border border-[#eaddd7] text-xs font-sans font-semibold text-[#1c1917] transition-colors shadow-2xs disabled:opacity-50 cursor-pointer"
+            >
+              {isSeedingPack === 'en-philosophical' ? (
+                <RefreshCw className="w-3 h-3 animate-spin text-[#834832]" />
+              ) : (
+                <span>🇬🇧</span>
+              )}
+              <span>Seed 100 Philosophical</span>
+            </button>
+          </div>
 
-          <button
-            type="button"
-            onClick={handleExportJSON}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-stone-300 bg-white hover:bg-stone-50 text-xs font-sans font-medium text-stone-700 transition-colors shadow-sm"
-          >
-            <FileJson className="w-3.5 h-3.5 text-[#834832]" />
-            <span>Export JSON</span>
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={handleExportMarkdown}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-stone-300 bg-white hover:bg-stone-50 text-xs font-sans font-medium text-stone-700 transition-colors shadow-sm"
+            >
+              <FileText className="w-3.5 h-3.5 text-[#834832]" />
+              <span>Export Markdown</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={handleExportAnkiCSV}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-stone-300 bg-white hover:bg-stone-50 text-xs font-sans font-medium text-stone-700 transition-colors shadow-sm"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5 text-[#834832]" />
-            <span>Export Anki CSV</span>
-          </button>
+            <button
+              type="button"
+              onClick={handleExportJSON}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-stone-300 bg-white hover:bg-stone-50 text-xs font-sans font-medium text-stone-700 transition-colors shadow-sm"
+            >
+              <FileJson className="w-3.5 h-3.5 text-[#834832]" />
+              <span>Export JSON</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleExportAnkiCSV}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-stone-300 bg-white hover:bg-stone-50 text-xs font-sans font-medium text-stone-700 transition-colors shadow-sm"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-[#834832]" />
+              <span>Export Anki CSV</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -593,6 +670,19 @@ export default function LexiconPage() {
             >
               <Network className="w-3.5 h-3.5" />
               <span>Root Network</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('analytics')}
+              className={cn(
+                'px-3 py-1.5 rounded-lg text-xs font-sans font-medium transition-all flex items-center gap-1.5',
+                viewMode === 'analytics'
+                  ? 'bg-white shadow-xs text-stone-900 font-semibold'
+                  : 'text-stone-600 hover:text-stone-900'
+              )}
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+              <span>Analytics</span>
             </button>
           </div>
         </div>
@@ -1079,9 +1169,15 @@ export default function LexiconPage() {
             </div>
           ))}
         </div>
-      ) : (
+      ) : viewMode === 'network' ? (
         /* --- VIEW 4: INTERACTIVE MORPHEME NETWORK GRAPH --- */
         <MorphemeGraph cards={filteredCards} />
+      ) : (
+        /* --- VIEW 5: FSRS RETENTION & 14-DAY FORECAST ANALYTICS --- */
+        <RetentionAnalytics
+          cards={filteredCards}
+          onInspectCard={(id) => setSelectedCardId(id)}
+        />
       )}
 
       {/* Slide-Over Card Inspector Drawer */}

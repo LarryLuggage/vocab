@@ -104,4 +104,6 @@ export interface ProductionValidationResult {
   feedback: string;
   revisedSentence?: string;
   registerDetected: string;
+  termsDetected?: string[];
+  missingTerms?: string[];
 }

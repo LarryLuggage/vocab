@@ -160,3 +160,9 @@ CREATE INDEX IF NOT EXISTS idx_vocab_term ON vocab_cards (term);
   - 1-click AI Re-Enrichment (`PATCH /api/cards/[id]` with `{ reenrich: true }`) upgrading fallback cards while preserving user citations and FSRS scheduling history.
   - Bibliographic Source & Author Explorer (`viewMode === 'sources'`) on `/lexicon` with source-grouped cards and 1-click source drill sessions (`/review?source=...`).
   - Global `⌘K` / `Ctrl+K` keyboard shortcut in `components/Navbar.tsx` routing directly to `/add` and focusing `#term-input`.
+
+- **Phase 5: Multi-Word Synthesis Studio (`ACT-04`), FSRS Retention Analytics (`SRS-05`) & Spanish Literary Curriculum (`CUR-02`) (Complete)**:
+  - Multi-Word Synthesis Studio (`ACT-04: Synthesis Weave`) on `/review` challenging users to weave 2–3 due vocabulary words into a single cohesive philosophical/literary passage with live word-detection chips and multi-term evaluation (`POST /api/validate-production`).
+  - FSRS 14-Day Retention Forecast & Memory Analytics (`components/RetentionAnalytics.tsx`, `/lexicon?view=analytics`) featuring a 14-day stacked EN/ES workload forecast chart, Mean Stability ($S$) & Difficulty ($D$) KPIs, maturity distribution, and a High-Difficulty / Leech watchlist.
+  - Curated 25-term High-Register Spanish Literary & Philosophical Seed Pack (`lib/db/spanish-seed-data.ts`, `POST /api/cards/seed`) with citations from Borges, Ortega y Gasset, Unamuno, Paz, Cortázar, Sor Juana, Reyes, and Zambrano, plus 1-click curriculum seeding on `/lexicon`.
+
