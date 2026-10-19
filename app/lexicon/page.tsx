@@ -31,6 +31,7 @@ import { CardWithSrs, FSRSState } from '@/types/lexis';
 import { MorphemeGraph } from '@/components/MorphemeGraph';
 import { RetentionAnalytics } from '@/components/RetentionAnalytics';
 import { CardInspectorDrawer } from '@/components/CardInspectorDrawer';
+import { CustomPackModal } from '@/components/CustomPackModal';
 import { apiFetch, errorMessageOf, CARDS_UPDATED_EVENT, notifyCardsUpdated } from '@/lib/api-client';
 import { getCardStateLabel } from '@/lib/fsrs';
 import { formatGenderBadge } from '@/lib/language';
@@ -60,11 +61,12 @@ export default function LexiconPage() {
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [exportNotification, setExportNotification] = useState<string | null>(null);
   const [isSeedingPack, setIsSeedingPack] = useState<'es-literary' | 'en-philosophical' | null>(null);
+  const [isPackModalOpen, setIsPackModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check URL search parameters on mount (search, q, term, view, inspect)
+    // Check URL search parameters on mount (search, q, term, view, inspect, packStudio)
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const searchParam = params.get('search') || params.get('q') || params.get('term');
@@ -84,6 +86,9 @@ export default function LexiconPage() {
       const inspectParam = params.get('inspect');
       if (inspectParam) {
         setSelectedCardId(inspectParam);
+      }
+      if (params.get('packStudio') === 'open') {
+        setIsPackModalOpen(true);
       }
     }
 
@@ -406,6 +411,14 @@ export default function LexiconPage() {
             </span>
             <button
               type="button"
+              onClick={() => setIsPackModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#834832] hover:bg-[#693522] text-xs font-sans font-semibold text-white transition-colors shadow-2xs cursor-pointer"
+            >
+              <Sparkles className="w-3 h-3" />
+              <span>✨ Pack Studio & Custom Topics</span>
+            </button>
+            <button
+              type="button"
               disabled={isSeedingPack !== null}
               onClick={() => handleSeedPack('es-literary')}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white hover:bg-amber-50 border border-[#eaddd7] text-xs font-sans font-semibold text-[#1c1917] transition-colors shadow-2xs disabled:opacity-50 cursor-pointer"
@@ -433,6 +446,14 @@ export default function LexiconPage() {
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
+            <Link
+              href="/add?mode=passage"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-[#eaddd7] bg-[#fdf8f6] hover:bg-[#f2e8e5] text-xs font-sans font-semibold text-[#834832] transition-colors shadow-sm"
+            >
+              <Quote className="w-3.5 h-3.5 text-[#834832]" />
+              <span>Bulk Passage Capture</span>
+            </Link>
+
             <button
               type="button"
               onClick={handleExportMarkdown}
@@ -1190,6 +1211,19 @@ export default function LexiconPage() {
         onCardDeleted={(deletedId) => {
           setCards((prev) => prev.filter((c) => c.id !== deletedId));
           setSelectedCardId(null);
+        }}
+      />
+
+      {/* Custom Pack Studio & Topic Generator Modal */}
+      <CustomPackModal
+        isOpen={isPackModalOpen}
+        onClose={() => setIsPackModalOpen(false)}
+        onPackSeeded={(message) => {
+          setExportNotification(message);
+          setTimeout(() => setExportNotification(null), 5000);
+          apiFetch<{ data: CardWithSrs[] }>('/api/cards')
+            .then((payload) => setCards(payload.data))
+            .catch(() => {});
         }}
       />
     </div>
