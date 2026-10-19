@@ -14,6 +14,7 @@ import { GET as diagnosticHandler } from '@/app/api/diagnostic/route';
 import { POST as seedCardsHandler } from '@/app/api/cards/seed/route';
 import { resolveDiagnosticStatus } from '@/lib/diagnostic-status';
 import { resetDbStore } from '@/lib/db';
+import { extractClozeToken } from '@/lib/utils';
 
 describe('Lexis Engine API Route Handlers', () => {
   beforeEach(() => {
@@ -402,6 +403,38 @@ describe('Lexis Engine API Route Handlers', () => {
       expect(sourceJson.count).toBe(1);
       expect(sourceJson.data[0].term).toBe('susurrus');
     });
+
+    it('grades multiple cards in a single batch POST /api/review request via cardIds', async () => {
+      const reviewReq = new NextRequest('http://localhost:3000/api/review');
+      const reviewRes = await getReviewHandler(reviewReq);
+      const reviewJson = await reviewRes.json();
+      const card1 = reviewJson.data[0];
+      const card2 = reviewJson.data[1];
+
+      const postReq = new NextRequest('http://localhost:3000/api/review', {
+        method: 'POST',
+        body: JSON.stringify({
+          cardIds: [card1.id, card2.id],
+          rating: 3,
+        }),
+      });
+      const postRes = await postReviewHandler(postReq);
+      expect(postRes.status).toBe(200);
+      const json = await postRes.json();
+      expect(json.success).toBe(true);
+      expect(json.batchCount).toBe(2);
+      expect(json.batchResults).toHaveLength(2);
+      expect(json.batchResults[0].updatedSrs.reps).toBe(card1.srs.reps + 1);
+      expect(json.batchResults[1].updatedSrs.reps).toBe(card2.srs.reps + 1);
+    });
+  });
+
+  describe('extractClozeToken utility', () => {
+    it('normalizes Anki-style and plain cloze markers into clean target tokens', () => {
+      expect(extractClozeToken('{{c1::epistemology}}')).toBe('epistemology');
+      expect(extractClozeToken('{{c2::desengaño::hint}}')).toBe('desengaño');
+      expect(extractClozeToken('{{weltanschauung}}')).toBe('weltanschauung');
+    });
   });
 
   describe('POST /api/validate-production', () => {
@@ -469,7 +502,9 @@ describe('Lexis Engine API Route Handlers', () => {
       expect(json1.success).toBe(true);
       expect(json1.pack).toBe('es-literary');
       expect(json1.added).toBe(25);
+      expect(json1.seededCount).toBe(25);
       expect(json1.skipped).toBe(0);
+      expect(json1.skippedCount).toBe(0);
       expect(json1.total).toBe(30); // 5 initial English cards + 25 Spanish cards
 
       // Second invocation should add 0 duplicates
@@ -482,7 +517,9 @@ describe('Lexis Engine API Route Handlers', () => {
       const json2 = await res2.json();
       expect(json2.success).toBe(true);
       expect(json2.added).toBe(0);
+      expect(json2.seededCount).toBe(0);
       expect(json2.skipped).toBe(25);
+      expect(json2.skippedCount).toBe(25);
       expect(json2.total).toBe(30);
 
       // Verify all 25 Spanish cards are retrievable via GET /api/cards?language=es
@@ -490,6 +527,41 @@ describe('Lexis Engine API Route Handlers', () => {
       const esRes = await getCardsHandler(esReq);
       const esJson = await esRes.json();
       expect(esJson.count).toBe(25);
+    });
+
+    it('supports pack="es" and pack="all" with single-batch bulkCreateCards and idempotency', async () => {
+      const esSeedReq = new NextRequest('http://localhost:3000/api/cards/seed', {
+        method: 'POST',
+        body: JSON.stringify({ pack: 'es' }),
+      });
+      const esRes = await seedCardsHandler(esSeedReq);
+      expect(esRes.status).toBe(200);
+      const esJson = await esRes.json();
+      expect(esJson.seededCount).toBe(25);
+      expect(esJson.skippedCount).toBe(0);
+
+      // Now seed 'all' (25 Spanish + 100 English philosophical, 5 of which overlap initial sample terms)
+      const allSeedReq = new NextRequest('http://localhost:3000/api/cards/seed', {
+        method: 'POST',
+        body: JSON.stringify({ pack: 'all' }),
+      });
+      const allRes = await seedCardsHandler(allSeedReq);
+      expect(allRes.status).toBe(200);
+      const allJson = await allRes.json();
+      expect(allJson.success).toBe(true);
+      expect(allJson.totalAvailableInPack).toBe(125);
+      expect(allJson.seededCount).toBeGreaterThan(0);
+      expect(allJson.skippedCount).toBeGreaterThanOrEqual(25);
+
+      // Second 'all' run is completely idempotent
+      const allSeedReq2 = new NextRequest('http://localhost:3000/api/cards/seed', {
+        method: 'POST',
+        body: JSON.stringify({ pack: 'all' }),
+      });
+      const allRes2 = await seedCardsHandler(allSeedReq2);
+      const allJson2 = await allRes2.json();
+      expect(allJson2.seededCount).toBe(0);
+      expect(allJson2.skippedCount).toBe(125);
     });
   });
 

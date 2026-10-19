@@ -662,6 +662,89 @@ export async function createCard(
   };
 }
 
+export type BulkCardInput = Omit<VocabCard, 'id' | 'created_at'> & {
+  id?: string;
+  created_at?: string;
+  srs?: Partial<SrsCard>;
+};
+
+export async function bulkCreateCards(
+  inputs: BulkCardInput[],
+  userId: string = DEFAULT_USER_ID
+): Promise<CardWithSrs[]> {
+  if (inputs.length === 0) return [];
+
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    const store = memoryStore();
+    return inputs.map((input) => {
+      const { srs: srsData, ...cardData } = input;
+      return store.create(
+        {
+          ...cardData,
+          user_id: cardData.user_id || userId,
+        },
+        srsData
+      );
+    });
+  }
+
+  const now = new Date().toISOString();
+  const vocabRows: VocabCard[] = [];
+  const srsRows: SrsCard[] = [];
+
+  for (const input of inputs) {
+    const { srs: srsData, ...cardData } = input;
+    const id = cardData.id || crypto.randomUUID();
+    const targetUserId = cardData.user_id || userId;
+    const created_at = cardData.created_at || now;
+
+    vocabRows.push({
+      ...cardData,
+      id,
+      user_id: targetUserId,
+      language: cardData.language || 'en',
+      gender: cardData.gender || null,
+      english_gloss: cardData.english_gloss || null,
+      created_at,
+    });
+
+    srsRows.push({
+      ...createInitialSrsCard(id, targetUserId),
+      ...(srsData || {}),
+      card_id: id,
+      user_id: targetUserId,
+    });
+  }
+
+  const { data: createdVocabs, error: vocabErr } = await supabase
+    .from('vocab_cards')
+    .insert(vocabRows)
+    .select();
+  check(vocabErr, 'bulk card insert');
+
+  const { data: createdSrsList, error: srsErr } = await supabase
+    .from('srs_cards')
+    .insert(srsRows)
+    .select();
+
+  if (srsErr) {
+    const ids = vocabRows.map((v) => v.id);
+    await supabase.from('vocab_cards').delete().in('id', ids);
+    check(srsErr, 'bulk schedule insert');
+  }
+
+  const srsByCardId = new Map<string, SrsCard>();
+  for (const srs of (createdSrsList || []) as SrsCard[]) {
+    srsByCardId.set(srs.card_id, srs);
+  }
+
+  return ((createdVocabs || []) as VocabCard[]).map((vocab) => ({
+    ...vocab,
+    srs: srsByCardId.get(vocab.id) || createInitialSrsCard(vocab.id, vocab.user_id),
+  }));
+}
+
 export async function updateCard(
   id: string,
   updates: Partial<VocabCard>,

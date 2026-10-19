@@ -20,7 +20,7 @@ import { VocabCard, CardWithSrs } from '@/types/lexis';
 import { apiFetch, ApiError, errorMessageOf, notifyCardsUpdated } from '@/lib/api-client';
 import { parseShareTargetPayload } from '@/lib/share-parser';
 import { detectLanguage, formatGenderBadge } from '@/lib/language';
-import { cn } from '@/lib/utils';
+import { cn, extractClozeToken } from '@/lib/utils';
 
 function fallbackSourceLabel(source?: string | null): string {
   switch (source) {
@@ -778,7 +778,7 @@ export default function QuickCapturePage() {
                         key={i}
                         className="px-2 py-0.5 mx-1 font-mono font-bold text-xs rounded bg-[#834832] text-white"
                       >
-                        [ {part.slice(2, -2)} ]
+                        [ {extractClozeToken(part)} ]
                       </span>
                     );
                   }

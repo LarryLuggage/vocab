@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { listCards, createCard, DEFAULT_USER_ID } from '@/lib/db';
+import { listCards, bulkCreateCards, BulkCardInput, DEFAULT_USER_ID } from '@/lib/db';
 import { SPANISH_LITERARY_SEED_CARDS } from '@/lib/db/spanish-seed-data';
 import { PHILOSOPHICAL_SEED_CARDS } from '@/lib/db/philosophical-seed-data';
 import { CardWithSrs } from '@/types/lexis';
@@ -7,8 +7,7 @@ import { CardWithSrs } from '@/types/lexis';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const pack: 'es-literary' | 'en-philosophical' | 'all' =
-      body.pack === 'en-philosophical' || body.pack === 'all' ? body.pack : 'es-literary';
+    const rawPack = typeof body.pack === 'string' ? body.pack.trim() : 'es-literary';
     const userId: string = body.userId || DEFAULT_USER_ID;
 
     const existing = await listCards({ userId });
@@ -16,15 +15,15 @@ export async function POST(req: NextRequest) {
     const existingIds = new Set(existing.map((c) => c.id));
 
     let candidates: CardWithSrs[] = [];
-    if (pack === 'es-literary') {
-      candidates = SPANISH_LITERARY_SEED_CARDS;
-    } else if (pack === 'en-philosophical') {
+    if (rawPack === 'en-philosophical' || rawPack === 'en') {
       candidates = PHILOSOPHICAL_SEED_CARDS;
-    } else {
+    } else if (rawPack === 'all') {
       candidates = [...SPANISH_LITERARY_SEED_CARDS, ...PHILOSOPHICAL_SEED_CARDS];
+    } else {
+      candidates = SPANISH_LITERARY_SEED_CARDS;
     }
 
-    let addedCount = 0;
+    const toInsert: BulkCardInput[] = [];
     let skippedCount = 0;
 
     for (const seedCard of candidates) {
@@ -37,31 +36,35 @@ export async function POST(req: NextRequest) {
       const { srs, ...vocabPart } = seedCard;
       const targetId = existingIds.has(vocabPart.id) ? crypto.randomUUID() : vocabPart.id;
 
-      await createCard(
-        {
-          ...vocabPart,
-          id: targetId,
-          user_id: userId,
-        },
-        {
+      toInsert.push({
+        ...vocabPart,
+        id: targetId,
+        user_id: userId,
+        srs: {
           ...srs,
           card_id: targetId,
           user_id: userId,
-        }
-      );
+        },
+      });
 
       existingTerms.add(normalizedTerm);
       existingIds.add(targetId);
-      addedCount++;
     }
+
+    const insertedCards = await bulkCreateCards(toInsert, userId);
+    const addedCount = insertedCards.length;
 
     return NextResponse.json(
       {
         success: true,
-        pack,
+        pack: rawPack,
         added: addedCount,
         skipped: skippedCount,
         total: existing.length + addedCount,
+        seededCount: addedCount,
+        skippedCount,
+        totalAvailableInPack: candidates.length,
+        message: `Seeded ${addedCount} cards (${skippedCount} already existed).`,
       },
       { status: 200 }
     );

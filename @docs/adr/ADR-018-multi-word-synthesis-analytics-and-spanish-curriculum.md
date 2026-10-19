@@ -37,9 +37,18 @@ With Tier 1 (`ADR-016`: Morpheme Network Graph, Second-Brain Markdown Export, an
 - Merged `SPANISH_LITERARY_SEED_CARDS` into `CURATED_LEXICON` in `lib/llm/curated-lexicon.ts` for zero-latency offline enrichment.
 - Created `POST /api/cards/seed` (`app/api/cards/seed/route.ts`) to idempotently seed `'es-literary'`, `'en-philosophical'`, or `'all'` into the active store without duplicating existing terms, and wired 1-click seed buttons into `/lexicon`.
 
+### 4. Phase 5.1 Quality, Pedagogical UX & Serverless Hardening
+Following a comprehensive audit of the 125-card bilingual curriculum and active drill modalities, five concrete improvements were implemented:
+- **Cloze Marker Normalization (`extractClozeToken` in `lib/utils.ts`)**: All 100 English philosophical cards, 25 Spanish literary cards, and appended sighting contexts use Anki-style `{{c1::word}}` markers. `extractClozeToken` strips `{{`, `}}`, leading `c\d+::` prefixes, and optional `::hint` suffixes across `app/review/page.tsx`, `components/CardInspectorDrawer.tsx`, and `app/add/page.tsx` so literal `c1::` prefixes never leak into UI badges.
+- **Multi-Sentence Cloze Rotation & Context Switcher (`ACT-01`)**: `app/review/page.tsx` now initializes `clozeSentenceIndex` to `(currentCard.srs.reps ?? 0) % cloze_sentences.length` so subsequent FSRS repetitions automatically rotate across a card's primary and secondary cloze contexts (plus any appended literary sightings), accompanied by an interactive `"Context X of N • Cycle ↻"` pill button.
+- **Deterministic Seeded Option Shuffling (`ACT-02: Distinction Matrix`)**: Because `distinction_matrix.synonyms[0]` is canonically the target word in seed data, `app/review/page.tsx` now applies a deterministic FNV-1a / golden-ratio shuffle seeded by `${currentCard.id}:${currentCard.srs.reps}:${currentIndex}` to `distinctionData.options` so Option 1 on the left is no longer 100% of the time the correct answer.
+- **Single-Batch Curriculum Seeding (`bulkCreateCards` in `lib/db/index.ts` & `scripts/seed.mjs`)**: Replaced the sequential `for ... await createCard()` loop in `POST /api/cards/seed` with `bulkCreateCards`, reducing 50–250 sequential Supabase HTTP roundtrips to 2 batch `.insert()` calls (`vocab_cards` + `srs_cards`) to prevent Vercel Hobby 10s serverless timeouts (`ADR-014`). Added `--pack en|es|all` support to `scripts/seed.mjs`.
+- **Batch FSRS Grading in `ACT-04: Synthesis Weave`**: Extended `POST /api/review` (`app/api/review/route.ts`) to accept optional `cardIds: string[]` and added a `"Batch FSRS Grade"` toggle in `ACT-04` so learners weaving 2–3 due concepts can credit all woven companion cards in a single FSRS rating action and automatically prune already-graded companion cards from the remainder of the session queue.
+
 ---
 
 ## Consequences
 
-- **Positive**: Users can now practice multi-word rhetorical synthesis (`ACT-04`), inspect their 14-day FSRS memory forecast and leech watchlist (`SRS-05`), and load a rich 25-word Spanish literary/philosophical curriculum (`CUR-02`) with one click.
+- **Positive**: Users can now practice multi-word rhetorical synthesis (`ACT-04`) with batch FSRS grading, drill rotating cloze contexts (`ACT-01`) and deterministically shuffled synonym distinctions (`ACT-02`) without `c1::` token leaks, inspect their 14-day FSRS memory forecast and leech watchlist (`SRS-05`), and load the 125-word bilingual curriculum (`CUR-01` + `CUR-02`) in a single fast batch insert.
 - **Negative / Trade-offs**: Multi-word synthesis logs an entry per participating card in `production_logs`, slightly increasing log volume in exchange for complete per-card production history inside `CardInspectorDrawer`.
+
