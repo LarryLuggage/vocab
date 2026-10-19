@@ -11,6 +11,7 @@ import { GET as getReviewHandler, POST as postReviewHandler } from '@/app/api/re
 import { POST as validateProductionHandler } from '@/app/api/validate-production/route';
 import { GET as exportHandler } from '@/app/api/export/route';
 import { GET as diagnosticHandler } from '@/app/api/diagnostic/route';
+import { POST as seedCardsHandler } from '@/app/api/cards/seed/route';
 import { resolveDiagnosticStatus } from '@/lib/diagnostic-status';
 import { resetDbStore } from '@/lib/db';
 
@@ -426,6 +427,69 @@ describe('Lexis Engine API Route Handlers', () => {
       expect(json.data.evaluationStatus).toBe('pass');
       expect(json.log).not.toBeNull();
       expect(json.log.card_id).toBe(targetCard.id);
+    });
+
+    it('validates multi-word synthesis passage (ACT-04) and logs attempts across multiple cardIds', async () => {
+      const listReq = new NextRequest('http://localhost:3000/api/cards');
+      const listRes = await getCardsHandler(listReq);
+      const listJson = await listRes.json();
+      const cardA = listJson.data.find((c: any) => c.term === 'perspicacious')!;
+      const cardB = listJson.data.find((c: any) => c.term === 'inchoate')!;
+
+      const req = new NextRequest('http://localhost:3000/api/validate-production', {
+        method: 'POST',
+        body: JSON.stringify({
+          terms: [cardA.term, cardB.term],
+          cardIds: [cardA.id, cardB.id],
+          userSentence:
+            'A perspicacious critic readily recognized the philosophical promise latent within those inchoate drafts.',
+        }),
+      });
+
+      const res = await validateProductionHandler(req);
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.success).toBe(true);
+      expect(json.data.evaluationStatus).toBe('pass');
+      expect(json.data.termsDetected).toEqual(['perspicacious', 'inchoate']);
+      expect(json.data.missingTerms).toEqual([]);
+      expect(json.logsCount).toBe(2);
+    });
+  });
+
+  describe('POST /api/cards/seed', () => {
+    it('seeds the 25-term Spanish literary & philosophical pack idempotently (CUR-02)', async () => {
+      const seedReq1 = new NextRequest('http://localhost:3000/api/cards/seed', {
+        method: 'POST',
+        body: JSON.stringify({ pack: 'es-literary' }),
+      });
+      const res1 = await seedCardsHandler(seedReq1);
+      expect(res1.status).toBe(200);
+      const json1 = await res1.json();
+      expect(json1.success).toBe(true);
+      expect(json1.pack).toBe('es-literary');
+      expect(json1.added).toBe(25);
+      expect(json1.skipped).toBe(0);
+      expect(json1.total).toBe(30); // 5 initial English cards + 25 Spanish cards
+
+      // Second invocation should add 0 duplicates
+      const seedReq2 = new NextRequest('http://localhost:3000/api/cards/seed', {
+        method: 'POST',
+        body: JSON.stringify({ pack: 'es-literary' }),
+      });
+      const res2 = await seedCardsHandler(seedReq2);
+      expect(res2.status).toBe(200);
+      const json2 = await res2.json();
+      expect(json2.success).toBe(true);
+      expect(json2.added).toBe(0);
+      expect(json2.skipped).toBe(25);
+      expect(json2.total).toBe(30);
+
+      // Verify all 25 Spanish cards are retrievable via GET /api/cards?language=es
+      const esReq = new NextRequest('http://localhost:3000/api/cards?language=es');
+      const esRes = await getCardsHandler(esReq);
+      const esJson = await esRes.json();
+      expect(esJson.count).toBe(25);
     });
   });
 

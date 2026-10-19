@@ -36,11 +36,14 @@ import {
   getSchedulePreviews,
   getCardStateLabel,
 } from '@/lib/fsrs';
-import { validateProductionSentence } from '@/lib/production-validator';
+import {
+  validateProductionSentence,
+  validateSynthesisPassage,
+} from '@/lib/production-validator';
 import { normalizeDiacritics, formatGenderBadge } from '@/lib/language';
 import { cn } from '@/lib/utils';
 
-type ModalityMode = 'ACT-01' | 'ACT-02' | 'ACT-03';
+type ModalityMode = 'ACT-01' | 'ACT-02' | 'ACT-03' | 'ACT-04';
 
 function CardFullDetails({
   card,
@@ -213,6 +216,15 @@ export default function ReviewPage() {
       const cardId = params.get('cardId') || undefined;
       const root = params.get('root') || undefined;
       const source = params.get('source') || undefined;
+      const modalityParam = params.get('modality')?.toUpperCase();
+      if (
+        modalityParam === 'ACT-01' ||
+        modalityParam === 'ACT-02' ||
+        modalityParam === 'ACT-03' ||
+        modalityParam === 'ACT-04'
+      ) {
+        setActiveModality(modalityParam);
+      }
       if (cardId || root || source) {
         setActiveFilter((prev) => {
           if (
@@ -268,6 +280,14 @@ export default function ReviewPage() {
   const [isVerifyingProduction, setIsVerifyingProduction] = useState(false);
   const [productionResult, setProductionResult] =
     useState<ProductionValidationResult | null>(null);
+
+  // Modality 4: Synthesis Weave (ACT-04) state
+  const [synthesisCount, setSynthesisCount] = useState<2 | 3>(2);
+  const [synthesisPassage, setSynthesisPassage] = useState('');
+  const [isVerifyingSynthesis, setIsVerifyingSynthesis] = useState(false);
+  const [synthesisResult, setSynthesisResult] =
+    useState<ProductionValidationResult | null>(null);
+  const [showSynthesisDrawer, setShowSynthesisDrawer] = useState(false);
 
   // Strict Answer Masking state (spoiler prevention)
   const [isAnswerRevealed, setIsAnswerRevealed] = useState(false);
@@ -335,6 +355,58 @@ export default function ReviewPage() {
   // Current Card
   const currentCard: CardWithSrs | undefined = queue[currentIndex];
 
+  // Synthesis Companion Selection (ACT-04)
+  const synthesisCards = useMemo<CardWithSrs[]>(() => {
+    if (!currentCard) return [];
+    const targetLang = currentCard.language || 'en';
+    const candidatePool = queue.length >= synthesisCount ? queue : rawQueue;
+    const sameLangCompanions: CardWithSrs[] = [];
+    const otherCompanions: CardWithSrs[] = [];
+
+    // Rotate starting from currentIndex + 1 so each card gets distinct companions
+    const totalPool = candidatePool.length;
+    for (let offset = 1; offset < totalPool; offset++) {
+      const candidate = candidatePool[(currentIndex + offset) % totalPool];
+      if (!candidate || candidate.id === currentCard.id) continue;
+      if ((candidate.language || 'en') === targetLang) {
+        if (!sameLangCompanions.some((c) => c.id === candidate.id)) {
+          sameLangCompanions.push(candidate);
+        }
+      } else {
+        if (!otherCompanions.some((c) => c.id === candidate.id)) {
+          otherCompanions.push(candidate);
+        }
+      }
+    }
+
+    const picked = [...sameLangCompanions, ...otherCompanions].slice(
+      0,
+      synthesisCount - 1
+    );
+    return [currentCard, ...picked];
+  }, [currentCard, queue, rawQueue, synthesisCount, currentIndex]);
+
+  // Live Client-Side Word Detection for ACT-04
+  const synthesisWordDetection = useMemo(() => {
+    const normPassage = normalizeDiacritics(synthesisPassage.toLowerCase());
+    const detectedMap: Record<string, boolean> = {};
+
+    for (const card of synthesisCards) {
+      const normTerm = normalizeDiacritics(card.term.trim().toLowerCase());
+      if (!normPassage || !normTerm) {
+        detectedMap[card.id] = false;
+        continue;
+      }
+      const exactMatch = normPassage.includes(normTerm);
+      const stemPrefix =
+        normTerm.length >= 6 ? normTerm.slice(0, Math.max(4, normTerm.length - 2)) : normTerm;
+      const stemMatch = stemPrefix.length >= 4 && normPassage.includes(stemPrefix);
+      detectedMap[card.id] = exactMatch || stemMatch;
+    }
+
+    return detectedMap;
+  }, [synthesisCards, synthesisPassage]);
+
   // Previews for FSRS 4 ratings
   const schedulePreviews = useMemo(() => {
     if (!currentCard) return [];
@@ -351,6 +423,9 @@ export default function ReviewPage() {
     setDistinctionFeedback(null);
     setProductionSentence('');
     setProductionResult(null);
+    setSynthesisPassage('');
+    setSynthesisResult(null);
+    setShowSynthesisDrawer(false);
     setIsAnswerRevealed(false);
     setShowSandboxHints(false);
   }, [currentIndex, currentCard?.id]);
@@ -364,6 +439,9 @@ export default function ReviewPage() {
     }
     if (activeModality === 'ACT-03') {
       setShowSandboxHints(true);
+    }
+    if (activeModality === 'ACT-04') {
+      setShowSynthesisDrawer(true);
     }
   }, [activeModality]);
 
@@ -488,6 +566,47 @@ export default function ReviewPage() {
       setShowSandboxHints(true);
     } finally {
       setIsVerifyingProduction(false);
+    }
+  };
+
+  // Handle multi-word synthesis passage verification (ACT-04)
+  const handleVerifySynthesis = async () => {
+    if (!currentCard || synthesisCards.length === 0 || !synthesisPassage.trim()) return;
+
+    setIsVerifyingSynthesis(true);
+    setSynthesisResult(null);
+
+    const terms = synthesisCards.map((c) => c.term);
+    const cardIds = synthesisCards.map((c) => c.id);
+
+    try {
+      const result = await validateSynthesisPassage(terms, synthesisPassage, cardIds);
+      setSynthesisResult(result);
+      setIsAnswerRevealed(true);
+      setShowSynthesisDrawer(true);
+      setTotalAttempts((prev) => prev + 1);
+      if (result.evaluationStatus === 'pass') {
+        setCorrectAttempts((prev) => prev + 1);
+      }
+    } catch {
+      const detected = synthesisCards
+        .filter((c) => synthesisWordDetection[c.id])
+        .map((c) => c.term);
+      const missing = synthesisCards
+        .filter((c) => !synthesisWordDetection[c.id])
+        .map((c) => c.term);
+
+      setSynthesisResult({
+        evaluationStatus: missing.length === 0 ? 'pass' : 'awkward',
+        registerDetected: 'Unverified',
+        termsDetected: detected,
+        missingTerms: missing,
+        feedback: 'Verification service unreachable, but synthesis passage recorded.',
+      });
+      setIsAnswerRevealed(true);
+      setShowSynthesisDrawer(true);
+    } finally {
+      setIsVerifyingSynthesis(false);
     }
   };
 
@@ -837,13 +956,13 @@ export default function ReviewPage() {
       </div>
 
       {/* Modality Mode Selector Tabs */}
-      <div className="flex items-center justify-between border-b border-[#e7e5e4] pb-2 overflow-x-auto gap-2">
-        <div className="flex items-center gap-1.5">
+      <div className="flex items-center justify-between border-b border-[#e7e5e4] pb-2 overflow-x-auto gap-3">
+        <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={() => setActiveModality('ACT-01')}
             className={cn(
-              'px-3.5 py-1.5 rounded-full text-xs font-sans font-medium transition-all whitespace-nowrap',
+              'px-3 py-1.5 rounded-full text-xs font-sans font-medium transition-all whitespace-nowrap',
               activeModality === 'ACT-01'
                 ? 'bg-[#834832] text-white shadow-sm'
                 : 'text-[#57534e] hover:bg-stone-200/60'
@@ -856,7 +975,7 @@ export default function ReviewPage() {
             type="button"
             onClick={() => setActiveModality('ACT-02')}
             className={cn(
-              'px-3.5 py-1.5 rounded-full text-xs font-sans font-medium transition-all whitespace-nowrap',
+              'px-3 py-1.5 rounded-full text-xs font-sans font-medium transition-all whitespace-nowrap',
               activeModality === 'ACT-02'
                 ? 'bg-[#834832] text-white shadow-sm'
                 : 'text-[#57534e] hover:bg-stone-200/60'
@@ -869,7 +988,7 @@ export default function ReviewPage() {
             type="button"
             onClick={() => setActiveModality('ACT-03')}
             className={cn(
-              'px-3.5 py-1.5 rounded-full text-xs font-sans font-medium transition-all whitespace-nowrap',
+              'px-3 py-1.5 rounded-full text-xs font-sans font-medium transition-all whitespace-nowrap',
               activeModality === 'ACT-03'
                 ? 'bg-[#834832] text-white shadow-sm'
                 : 'text-[#57534e] hover:bg-stone-200/60'
@@ -877,10 +996,23 @@ export default function ReviewPage() {
           >
             ACT-03: Production Sandbox
           </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveModality('ACT-04')}
+            className={cn(
+              'px-3 py-1.5 rounded-full text-xs font-sans font-medium transition-all whitespace-nowrap',
+              activeModality === 'ACT-04'
+                ? 'bg-[#834832] text-white shadow-sm'
+                : 'text-[#57534e] hover:bg-stone-200/60'
+            )}
+          >
+            ACT-04: Synthesis Weave
+          </button>
         </div>
 
         {/* FSRS Stats Chip */}
-        <div className="hidden sm:flex items-center gap-2 text-[11px] font-mono text-[#a8a29e]">
+        <div className="hidden md:flex items-center gap-1.5 shrink-0 text-[11px] font-mono text-[#a8a29e]">
           <span>S: {currentCard.srs.stability.toFixed(1)}d</span>
           <span>•</span>
           <span>D: {currentCard.srs.difficulty.toFixed(1)}</span>
@@ -1276,8 +1408,338 @@ export default function ReviewPage() {
           </div>
         )}
 
+        {/* --- MODALITY 4: MULTI-WORD SYNTHESIS WEAVE STUDIO (ACT-04) --- */}
+        {activeModality === 'ACT-04' && (
+          <div className="space-y-6">
+            {/* Header & Weave Count Toggle */}
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-sans font-semibold uppercase tracking-wider text-[#834832] flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>
+                      {currentCard.language === 'es'
+                        ? 'Estudio de Síntesis Léxica (ACT-04)'
+                        : 'Multi-Word Synthesis Studio (ACT-04)'}
+                    </span>
+                  </span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-sans font-bold uppercase tracking-wider bg-stone-100 text-stone-700">
+                    {currentCard.language === 'es' ? '🇪🇸 Español' : '🇬🇧 English'}
+                  </span>
+                </div>
+                <p className="text-sm font-sans text-[#57534e]">
+                  {currentCard.language === 'es'
+                    ? 'Entrelaza todas las palabras objetivo en un único pasaje coherente con precisión estilística y semántica.'
+                    : 'Weave all target headwords into a single cohesive sentence or short passage with scholarly precision.'}
+                </p>
+              </div>
+
+              {/* 2 Words vs 3 Words Toggle */}
+              <div className="inline-flex items-center rounded-xl border border-stone-200 p-0.5 bg-stone-100/80 text-xs font-sans self-start shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setSynthesisCount(2)}
+                  className={cn(
+                    'px-3 py-1 rounded-lg font-medium transition-all cursor-pointer',
+                    synthesisCount === 2
+                      ? 'bg-white text-[#834832] font-semibold shadow-2xs'
+                      : 'text-stone-600 hover:text-stone-900'
+                  )}
+                >
+                  2 Words
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSynthesisCount(3)}
+                  className={cn(
+                    'px-3 py-1 rounded-lg font-medium transition-all cursor-pointer',
+                    synthesisCount === 3
+                      ? 'bg-white text-[#834832] font-semibold shadow-2xs'
+                      : 'text-stone-600 hover:text-stone-900'
+                  )}
+                >
+                  3 Words
+                </button>
+              </div>
+            </div>
+
+            {/* Interactive Target Word Chips */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {synthesisCards.map((card, idx) => {
+                const isDetected = Boolean(synthesisWordDetection[card.id]);
+                const isPrimary = idx === 0;
+                const isCardEs = (card.language || 'en') === 'es';
+                const cardGenderBadge = isCardEs
+                  ? formatGenderBadge(card.gender, card.part_of_speech)
+                  : null;
+
+                return (
+                  <div
+                    key={card.id}
+                    className={cn(
+                      'p-3.5 rounded-xl border transition-all flex flex-col justify-between gap-2',
+                      isDetected
+                        ? 'bg-emerald-50/70 border-emerald-300 ring-1 ring-emerald-500/20'
+                        : isPrimary
+                        ? 'bg-[#fdf8f6] border-[#eaddd7]'
+                        : 'bg-stone-50/70 border-stone-200'
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-serif font-bold text-lg text-[#1c1917] capitalize">
+                          {card.term}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => playPronunciation(card.term, card.language)}
+                          title="Listen to pronunciation"
+                          aria-label={`Listen to ${card.term}`}
+                          className="p-1 rounded-full text-stone-400 hover:text-[#834832] transition-colors cursor-pointer"
+                        >
+                          <Volume2 className="w-3.5 h-3.5" />
+                        </button>
+                        {cardGenderBadge && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-sans font-bold bg-amber-50 text-amber-900 border border-amber-300">
+                            {cardGenderBadge.article}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Live Status Indicator */}
+                      <span
+                        className={cn(
+                          'px-2 py-0.5 rounded-full text-[10px] font-sans font-bold uppercase tracking-wider shrink-0 transition-colors',
+                          isDetected
+                            ? 'bg-emerald-200/80 text-emerald-900'
+                            : 'bg-stone-200/70 text-stone-600'
+                        )}
+                      >
+                        {isDetected ? '✓ Woven' : '○ Pending'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] font-sans text-stone-500">
+                      <span className="font-medium text-[#834832]">
+                        {card.part_of_speech}
+                      </span>
+                      <span className="font-mono text-[10px]">
+                        {isPrimary ? 'Primary Anchor' : `Companion #${idx}`}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Synthesis Passage Textarea */}
+            <div className="space-y-2">
+              <textarea
+                rows={4}
+                value={synthesisPassage}
+                onChange={(e) => setSynthesisPassage(e.target.value)}
+                placeholder={
+                  currentCard.language === 'es'
+                    ? `Escribe un pasaje que integre ${synthesisCards
+                        .map((c) => `"${c.term}"`)
+                        .join(' y ')}...`
+                    : `Compose a cohesive passage weaving together ${synthesisCards
+                        .map((c) => `"${c.term}"`)
+                        .join(', ')}...`
+                }
+                className="w-full text-base font-serif p-4 rounded-xl border border-stone-300 focus:outline-none focus:ring-2 focus:ring-[#834832]"
+              />
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-3 text-xs font-sans text-stone-500">
+                  <span>
+                    {synthesisPassage.trim()
+                      ? `${synthesisPassage.trim().split(/\s+/).length} ${
+                          currentCard.language === 'es' ? 'palabras' : 'words'
+                        }`
+                      : `0 ${currentCard.language === 'es' ? 'palabras' : 'words'}`}
+                  </span>
+                  <span>•</span>
+                  <span className="font-medium text-[#834832]">
+                    {
+                      synthesisCards.filter((c) => synthesisWordDetection[c.id])
+                        .length
+                    }{' '}
+                    of {synthesisCards.length} target words woven
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={isVerifyingSynthesis || !synthesisPassage.trim()}
+                  onClick={handleVerifySynthesis}
+                  className="px-4 py-2 rounded-xl bg-[#834832] text-white text-xs font-sans font-semibold hover:bg-[#693522] transition-colors disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+                >
+                  {isVerifyingSynthesis ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>
+                        {currentCard.language === 'es'
+                          ? 'Evaluando síntesis...'
+                          : 'Evaluating Weave...'}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-3.5 h-3.5" />
+                      <span>Verify Synthesis Weave</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Synthesis Verification Result */}
+            {synthesisResult && (
+              <div
+                className={cn(
+                  'p-4 rounded-xl border space-y-3 animate-in fade-in',
+                  synthesisResult.evaluationStatus === 'pass'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                    : synthesisResult.evaluationStatus === 'awkward'
+                    ? 'bg-amber-50 border-amber-200 text-amber-950'
+                    : 'bg-rose-50 border-rose-200 text-rose-950'
+                )}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        'px-2.5 py-0.5 rounded-full text-xs font-sans font-bold uppercase tracking-wider',
+                        synthesisResult.evaluationStatus === 'pass'
+                          ? 'bg-emerald-200 text-emerald-900'
+                          : synthesisResult.evaluationStatus === 'awkward'
+                          ? 'bg-amber-200 text-amber-900'
+                          : 'bg-rose-200 text-rose-900'
+                      )}
+                    >
+                      {synthesisResult.evaluationStatus === 'pass'
+                        ? 'Pass'
+                        : synthesisResult.evaluationStatus === 'awkward'
+                        ? 'Awkward'
+                        : 'Incorrect'}
+                    </span>
+                    <span className="text-xs font-sans text-stone-600">
+                      Detected: {synthesisResult.registerDetected}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Detected vs Missing Terms Breakdown */}
+                {(synthesisResult.termsDetected?.length ||
+                  synthesisResult.missingTerms?.length) ? (
+                  <div className="flex flex-wrap items-center gap-2 text-xs font-sans pt-0.5">
+                    {synthesisResult.termsDetected?.map((t) => (
+                      <span
+                        key={`det-${t}`}
+                        className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-900 border border-emerald-300 font-medium"
+                      >
+                        ✓ {t}
+                      </span>
+                    ))}
+                    {synthesisResult.missingTerms?.map((t) => (
+                      <span
+                        key={`mis-${t}`}
+                        className="px-2 py-0.5 rounded-md bg-rose-100 text-rose-900 border border-rose-300 font-medium"
+                      >
+                        ✗ Missing: {t}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+
+                <p className="text-sm font-serif leading-relaxed">
+                  {synthesisResult.feedback}
+                </p>
+
+                {synthesisResult.revisedSentence && (
+                  <p className="text-xs font-serif italic text-stone-600 pt-1.5 border-t border-stone-200/60">
+                    Suggested Synthesis: &ldquo;{synthesisResult.revisedSentence}&rdquo;
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Collapsible Synthesis Lexical Reference Drawer */}
+            <div className="pt-4 border-t border-stone-200 space-y-3">
+              <button
+                type="button"
+                onClick={() => setShowSynthesisDrawer((prev) => !prev)}
+                className="w-full flex items-center justify-between p-3.5 rounded-xl bg-stone-50 hover:bg-stone-100 border border-stone-200 text-xs font-sans font-semibold text-[#834832] transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <BookOpen className="w-4 h-4 text-[#834832]" />
+                  <span>Synthesis Lexical Reference Drawer</span>
+                  <span className="text-[11px] font-mono font-normal text-stone-500">
+                    ({showSynthesisDrawer || isAnswerRevealed
+                      ? `Showing all ${synthesisCards.length} target definitions`
+                      : 'Collapsed — recall definitions before peeking'})
+                  </span>
+                </div>
+                <ChevronDown
+                  className={cn(
+                    'w-4 h-4 text-stone-500 transition-transform duration-200',
+                    (showSynthesisDrawer || isAnswerRevealed) && 'rotate-180'
+                  )}
+                />
+              </button>
+
+              {(showSynthesisDrawer || isAnswerRevealed) && (
+                <div className="grid grid-cols-1 gap-4 pt-2 animate-in fade-in duration-300">
+                  {synthesisCards.map((card) => (
+                    <div
+                      key={`ref-${card.id}`}
+                      className="p-4 rounded-xl bg-stone-50/70 border border-stone-200 space-y-2"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <h4 className="font-serif font-bold text-lg text-[#1c1917] capitalize">
+                            {card.term}
+                          </h4>
+                          <span className="text-xs font-sans text-[#834832] font-medium">
+                            ({card.part_of_speech})
+                          </span>
+                        </div>
+                        {card.english_gloss && (
+                          <span className="text-xs font-serif italic text-[#0369a1]">
+                            “{card.english_gloss}”
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm font-serif text-[#292524] leading-relaxed">
+                        {card.primary_definition}
+                      </p>
+                      {card.nuance_note && (
+                        <p className="text-xs font-serif italic text-[#4f2416]">
+                          Nuance: {card.nuance_note}
+                        </p>
+                      )}
+                      {card.collocations?.length > 0 && (
+                        <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                          {card.collocations.map((col, i) => (
+                            <span
+                              key={i}
+                              className="px-2 py-0.5 rounded-full bg-white border border-stone-200 text-[11px] font-serif italic text-stone-700"
+                            >
+                              {col}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* --- Card Details Section for ACT-01 and ACT-02 (Masked until revealed) --- */}
-        {activeModality !== 'ACT-03' && (
+        {activeModality !== 'ACT-03' && activeModality !== 'ACT-04' && (
           <>
             {!isAnswerRevealed ? (
               <div className="pt-4 border-t border-stone-200">

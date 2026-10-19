@@ -19,3 +19,21 @@ export async function validateProductionSentence(
   });
   return res.data;
 }
+
+// Browser-side call to the multi-word synthesis validator (ACT-04).
+export async function validateSynthesisPassage(
+  terms: string[],
+  userSentence: string,
+  cardIds?: string[]
+): Promise<ProductionValidationResult> {
+  const cleanTerms = terms.map((t) => t.trim()).filter(Boolean);
+  const res = await apiFetch<{ data: ProductionValidationResult }>('/api/validate-production', {
+    method: 'POST',
+    body: JSON.stringify({
+      terms: cleanTerms,
+      userSentence: userSentence.trim(),
+      cardIds,
+    }),
+  });
+  return res.data;
+}

@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { ProductionEvaluationSchema } from '@/lib/llm/schema';
-import { validateProductionSentence, validateProductionFallback } from '@/lib/llm/validator';
+import {
+  validateProductionSentence,
+  validateProductionFallback,
+  validateSynthesisFallback,
+  validateSynthesisPassage,
+} from '@/lib/llm/validator';
 
 describe('Sentence Production Validator (ACT-03)', () => {
   it('passes a well-formed high-register sentence deploying target word', async () => {
@@ -126,4 +131,52 @@ describe('Sentence Production Validator (ACT-03)', () => {
       expect(result.revisedSentence).toContain('está desahuciado');
     });
   });
+
+  describe('Multi-Word Synthesis Validator (ACT-04)', () => {
+    it('passes a cohesive passage weaving multiple target words', async () => {
+      const result = await validateSynthesisPassage(
+        ['perspicacious', 'inchoate'],
+        'Only a perspicacious observer could discern the coherent philosophy emerging from those inchoate notes.'
+      );
+
+      expect(result.evaluationStatus).toBe('pass');
+      expect(result.termsDetected).toEqual(['perspicacious', 'inchoate']);
+      expect(result.missingTerms).toEqual([]);
+    });
+
+    it('flags missing target terms in multi-word synthesis', async () => {
+      const result = await validateSynthesisPassage(
+        ['perspicacious', 'inchoate', 'solipsism'],
+        'Her perspicacious critique exposed the inchoate assumptions of the treatise.'
+      );
+
+      expect(result.evaluationStatus).toBe('incorrect_usage');
+      expect(result.termsDetected).toEqual(['perspicacious', 'inchoate']);
+      expect(result.missingTerms).toEqual(['solipsism']);
+      expect(result.feedback).toContain('Missing target terms: solipsism');
+    });
+
+    it('flags overly compressed multi-word clauses as awkward', () => {
+      const result = validateSynthesisFallback(
+        ['perspicacious', 'inchoate'],
+        'Perspicacious yet inchoate.'
+      );
+
+      expect(result.evaluationStatus).toBe('awkward');
+      expect(result.termsDetected).toEqual(['perspicacious', 'inchoate']);
+      expect(result.missingTerms).toEqual([]);
+    });
+
+    it('validates Spanish multi-word synthesis weaving literary terms', async () => {
+      const result = await validateSynthesisPassage(
+        ['desasosiego', 'sosiego'],
+        'Tras años de íntimo desasosiego en la metrópoli, el poeta halló por fin el ansiado sosiego en el claustro.'
+      );
+
+      expect(result.evaluationStatus).toBe('pass');
+      expect(result.termsDetected).toEqual(['desasosiego', 'sosiego']);
+      expect(result.missingTerms).toEqual([]);
+    });
+  });
 });
+
