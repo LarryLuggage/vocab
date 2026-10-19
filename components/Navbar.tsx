@@ -2,16 +2,34 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { BookMarked, Plus, Sparkles, Library, Layers } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { apiFetch, CARDS_UPDATED_EVENT } from '@/lib/api-client';
 
 export default function Navbar() {
   const pathname = usePathname();
+  const router = useRouter();
   const [dueCount, setDueCount] = useState<number>(0);
 
   const isUnlockPage = pathname === '/unlock';
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        if (pathname === '/add') {
+          const input = document.getElementById('term-input') as HTMLInputElement | null;
+          input?.focus();
+          input?.select();
+        } else {
+          router.push('/add');
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [pathname, router]);
 
   useEffect(() => {
     if (isUnlockPage) return;

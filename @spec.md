@@ -154,3 +154,9 @@ CREATE INDEX IF NOT EXISTS idx_vocab_term ON vocab_cards (term);
   - Obsidian & NotebookLM Markdown bulk export endpoint (`/api/export?format=markdown`) with YAML frontmatter, `[[wikilinks]]`, and active production sentence logs (`lib/export-markdown.ts`).
   - Targeted morpheme, card, and reading-source practice filters (`/review?root=...`, `/review?cardId=...`, `/review?source=...`).
   - Offline PWA manifest and mobile installability.
+
+- **Phase 4: Card Lifecycle Inspector, Bibliographic Explorer & Global `⌘K` (Complete)**:
+  - Slide-over Card Inspector Drawer (`components/CardInspectorDrawer.tsx`) displaying full lexical dossiers, FSRS telemetry, historical `production_logs` from `ACT-03`, inline editing, and deletion.
+  - 1-click AI Re-Enrichment (`PATCH /api/cards/[id]` with `{ reenrich: true }`) upgrading fallback cards while preserving user citations and FSRS scheduling history.
+  - Bibliographic Source & Author Explorer (`viewMode === 'sources'`) on `/lexicon` with source-grouped cards and 1-click source drill sessions (`/review?source=...`).
+  - Global `⌘K` / `Ctrl+K` keyboard shortcut in `components/Navbar.tsx` routing directly to `/add` and focusing `#term-input`.

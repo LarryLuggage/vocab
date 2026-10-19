@@ -20,9 +20,14 @@ import {
   AlertTriangle,
   FileText,
   Network,
+  Quote,
+  BookMarked,
+  SlidersHorizontal,
+  Eye,
 } from 'lucide-react';
 import { CardWithSrs, FSRSState } from '@/types/lexis';
 import { MorphemeGraph } from '@/components/MorphemeGraph';
+import { CardInspectorDrawer } from '@/components/CardInspectorDrawer';
 import { apiFetch, errorMessageOf, CARDS_UPDATED_EVENT } from '@/lib/api-client';
 import { getCardStateLabel } from '@/lib/fsrs';
 import { formatGenderBadge } from '@/lib/language';
@@ -48,13 +53,14 @@ export default function LexiconPage() {
   const [selectedLanguage, setSelectedLanguage] = useState<'all' | 'en' | 'es'>('all');
   const [selectedTier, setSelectedTier] = useState<number | 'all'>('all');
   const [selectedOrigin, setSelectedOrigin] = useState<string | 'all'>('all');
-  const [viewMode, setViewMode] = useState<'catalog' | 'roots' | 'network'>('catalog');
+  const [viewMode, setViewMode] = useState<'catalog' | 'roots' | 'sources' | 'network'>('catalog');
+  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [exportNotification, setExportNotification] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check URL search parameters on mount (search, q, or term)
+    // Check URL search parameters on mount (search, q, term, view, inspect)
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const searchParam = params.get('search') || params.get('q') || params.get('term');
@@ -62,8 +68,17 @@ export default function LexiconPage() {
         setSearchQuery(searchParam);
       }
       const viewParam = params.get('view');
-      if (viewParam === 'network' || viewParam === 'roots' || viewParam === 'catalog') {
+      if (
+        viewParam === 'network' ||
+        viewParam === 'roots' ||
+        viewParam === 'sources' ||
+        viewParam === 'catalog'
+      ) {
         setViewMode(viewParam);
+      }
+      const inspectParam = params.get('inspect');
+      if (inspectParam) {
+        setSelectedCardId(inspectParam);
       }
     }
 
@@ -119,6 +134,9 @@ export default function LexiconPage() {
         const matchesDef = card.primary_definition.toLowerCase().includes(q);
         const matchesGloss = card.english_gloss?.toLowerCase().includes(q) || false;
         const matchesNuance = card.nuance_note?.toLowerCase().includes(q) || false;
+        const matchesAuthor = card.source_context?.author?.toLowerCase().includes(q) || false;
+        const matchesSource = card.source_context?.source?.toLowerCase().includes(q) || false;
+        const matchesSentence = card.source_context?.sentence?.toLowerCase().includes(q) || false;
         const matchesCollocations = card.collocations.some((c) =>
           c.toLowerCase().includes(q)
         );
@@ -128,7 +146,17 @@ export default function LexiconPage() {
             r.meaning.toLowerCase().includes(q) ||
             r.origin.toLowerCase().includes(q)
         );
-        if (!matchesTerm && !matchesDef && !matchesGloss && !matchesNuance && !matchesCollocations && !matchesRoots) {
+        if (
+          !matchesTerm &&
+          !matchesDef &&
+          !matchesGloss &&
+          !matchesNuance &&
+          !matchesAuthor &&
+          !matchesSource &&
+          !matchesSentence &&
+          !matchesCollocations &&
+          !matchesRoots
+        ) {
           return false;
         }
       }
@@ -178,6 +206,44 @@ export default function LexiconPage() {
     });
 
     return Object.entries(groups).sort((a, b) => b[1].cards.length - a[1].cards.length);
+  }, [filteredCards]);
+
+  // Grouping by reading source / author for "Sources" view
+  const sourceGroups = useMemo(() => {
+    const groups: Record<
+      string,
+      {
+        author: string | null;
+        sourceTitle: string | null;
+        filterKey: string;
+        cards: CardWithSrs[];
+      }
+    > = {};
+
+    filteredCards.forEach((card) => {
+      const author = card.source_context?.author?.trim() || null;
+      const sourceTitle = card.source_context?.source?.trim() || null;
+      const label =
+        [author, sourceTitle].filter(Boolean).join(' — ') ||
+        'Uncategorized / Personal Capture';
+      const filterKey = sourceTitle || author || '';
+
+      if (!groups[label]) {
+        groups[label] = {
+          author,
+          sourceTitle,
+          filterKey,
+          cards: [],
+        };
+      }
+      groups[label].cards.push(card);
+    });
+
+    return Object.entries(groups).sort((a, b) => {
+      if (a[0] === 'Uncategorized / Personal Capture') return 1;
+      if (b[0] === 'Uncategorized / Personal Capture') return -1;
+      return b[1].cards.length - a[1].cards.length;
+    });
   }, [filteredCards]);
 
   // Export JSON
@@ -460,7 +526,7 @@ export default function LexiconPage() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Instant search by term, morpheme root, collocation, or definition..."
+              placeholder="Instant search by term, morpheme root, author, book, collocation, or definition..."
               className="w-full text-sm font-sans pl-10 pr-4 py-2.5 rounded-xl border border-stone-200 bg-stone-50/50 focus:outline-none focus:ring-2 focus:ring-[#834832] focus:bg-white transition-all placeholder:text-stone-400"
             />
             {searchQuery && (
@@ -501,6 +567,19 @@ export default function LexiconPage() {
             >
               <GitBranch className="w-3.5 h-3.5" />
               <span>Etymological Roots</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('sources')}
+              className={cn(
+                'px-3 py-1.5 rounded-lg text-xs font-sans font-medium transition-all flex items-center gap-1.5',
+                viewMode === 'sources'
+                  ? 'bg-white shadow-xs text-stone-900 font-semibold'
+                  : 'text-stone-600 hover:text-stone-900'
+              )}
+            >
+              <BookMarked className="w-3.5 h-3.5" />
+              <span>Sources</span>
             </button>
             <button
               type="button"
@@ -645,6 +724,11 @@ export default function LexiconPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filteredCards.map((card) => {
             const isDue = new Date(card.srs.due).getTime() <= Date.now();
+            const hasCitation = Boolean(
+              card.source_context?.sentence ||
+                card.source_context?.author ||
+                card.source_context?.source
+            );
 
             return (
               <div
@@ -656,9 +740,15 @@ export default function LexiconPage() {
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <div className="flex items-baseline gap-2 flex-wrap">
-                        <h2 className="text-2xl font-serif font-bold text-[#1c1917] capitalize">
-                          {card.term}
-                        </h2>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedCardId(card.id)}
+                          className="text-left group/title cursor-pointer"
+                        >
+                          <h2 className="text-2xl font-serif font-bold text-[#1c1917] group-hover/title:text-[#834832] transition-colors capitalize">
+                            {card.term}
+                          </h2>
+                        </button>
                         {card.phonetic && (
                           <span className="text-xs font-mono text-[#78716c]">
                             {card.phonetic}
@@ -737,6 +827,31 @@ export default function LexiconPage() {
                     </div>
                   )}
 
+                  {/* Source / Author Citation Attribution Block */}
+                  {hasCitation && (
+                    <div className="p-2.5 rounded-xl bg-stone-50 border border-stone-200/80 text-xs space-y-1">
+                      {card.source_context?.sentence && (
+                        <p className="font-serif italic text-stone-700 line-clamp-2">
+                          “{card.source_context.sentence}”
+                        </p>
+                      )}
+                      {(card.source_context?.author || card.source_context?.source) && (
+                        <div className="flex items-center gap-1.5 text-[11px] font-sans text-stone-500">
+                          <Quote className="w-3 h-3 text-[#834832] shrink-0" />
+                          <span className="truncate">
+                            {[
+                              card.source_context.author,
+                              card.source_context.source,
+                              card.source_context.page ? `p. ${card.source_context.page}` : null,
+                            ]
+                              .filter(Boolean)
+                              .join(' • ')}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Roots */}
                   {card.etymology.roots?.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 pt-1">
@@ -766,7 +881,7 @@ export default function LexiconPage() {
                   )}
                 </div>
 
-                {/* Card Footer: FSRS Stability and Review Action */}
+                {/* Card Footer: FSRS Stability, Inspect/Edit, and Review Action */}
                 <div className="pt-3 border-t border-stone-100 flex items-center justify-between text-xs font-sans text-stone-500">
                   <div className="flex items-center gap-2 font-mono text-[11px]">
                     <span>S: {card.srs.stability.toFixed(1)}d</span>
@@ -774,13 +889,24 @@ export default function LexiconPage() {
                     <span>Reps: {card.srs.reps}</span>
                   </div>
 
-                  <Link
-                    href={`/review?cardId=${encodeURIComponent(card.id)}`}
-                    className="inline-flex items-center gap-1 text-[#834832] font-semibold hover:text-[#693522] group-hover:translate-x-0.5 transition-transform"
-                  >
-                    <span>Practice Drill</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </Link>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCardId(card.id)}
+                      className="inline-flex items-center gap-1 text-stone-600 hover:text-[#1c1917] font-medium cursor-pointer"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>Inspect / Edit</span>
+                    </button>
+
+                    <Link
+                      href={`/review?cardId=${encodeURIComponent(card.id)}`}
+                      className="inline-flex items-center gap-1 text-[#834832] font-semibold hover:text-[#693522] group-hover:translate-x-0.5 transition-transform"
+                    >
+                      <span>Practice Drill</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </Link>
+                  </div>
                 </div>
               </div>
             );
@@ -827,10 +953,10 @@ export default function LexiconPage() {
                 {/* Connected Words in this Morpheme Family */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {data.cards.map((card) => (
-                    <Link
+                    <div
                       key={card.id}
-                      href={`/review?cardId=${encodeURIComponent(card.id)}`}
-                      className="p-3.5 rounded-xl border border-stone-200 hover:border-[#834832] bg-[#fdf8f6]/50 hover:bg-[#fdf8f6] transition-all space-y-1.5 block group"
+                      onClick={() => setSelectedCardId(card.id)}
+                      className="p-3.5 rounded-xl border border-stone-200 hover:border-[#834832] bg-[#fdf8f6]/50 hover:bg-[#fdf8f6] transition-all space-y-1.5 block group cursor-pointer"
                     >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5 flex-wrap">
@@ -865,17 +991,111 @@ export default function LexiconPage() {
                           Anchor: “{card.english_gloss}”
                         </p>
                       )}
-                    </Link>
+                    </div>
                   ))}
                 </div>
               </div>
             );
           })}
         </div>
+      ) : viewMode === 'sources' ? (
+        /* --- VIEW 3: BIBLIOGRAPHIC SOURCES & AUTHORS GROUPING --- */
+        <div className="space-y-6">
+          {sourceGroups.map(([sourceLabel, data], idx) => (
+            <div
+              key={idx}
+              className="bg-white border border-[#e7e5e4] rounded-2xl p-6 shadow-sm space-y-4"
+            >
+              {/* Source / Author Header */}
+              <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-stone-100 pb-3">
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <BookMarked className="w-4 h-4 text-[#834832] shrink-0" />
+                  <h3 className="text-xl font-serif font-bold text-[#1c1917]">
+                    {sourceLabel}
+                  </h3>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-sans font-semibold text-[#834832] bg-[#834832]/10 px-2.5 py-0.5 rounded-full">
+                    {data.cards.length} {data.cards.length === 1 ? 'word' : 'words'}
+                  </span>
+                  {data.filterKey && (
+                    <Link
+                      href={`/review?source=${encodeURIComponent(data.filterKey)}`}
+                      className="inline-flex items-center gap-1 text-xs font-sans font-semibold text-[#834832] hover:text-[#693522] px-2.5 py-0.5 rounded-full border border-[#834832]/30 hover:bg-[#fdf8f6] transition-colors"
+                    >
+                      <span>Drill This Source</span>
+                      <ArrowRight className="w-3 h-3" />
+                    </Link>
+                  )}
+                </div>
+              </div>
+
+              {/* Cards Captured from this Source */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {data.cards.map((card) => (
+                  <div
+                    key={card.id}
+                    onClick={() => setSelectedCardId(card.id)}
+                    className="p-3.5 rounded-xl border border-stone-200 hover:border-[#834832] bg-[#fdf8f6]/50 hover:bg-[#fdf8f6] transition-all space-y-2 flex flex-col justify-between group cursor-pointer"
+                  >
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-serif font-bold text-base text-[#1c1917] group-hover:text-[#834832] capitalize">
+                            {card.term}
+                          </span>
+                          <span className="text-[10px] font-sans px-1.5 py-0.5 rounded bg-stone-100 text-stone-700">
+                            {(card.language || 'en') === 'es' ? '🇪🇸' : '🇬🇧'}
+                          </span>
+                        </div>
+                        <span className="text-[10px] font-sans px-2 py-0.5 rounded bg-stone-200/60 text-stone-700">
+                          {card.part_of_speech}
+                        </span>
+                      </div>
+
+                      <p className="text-xs font-serif text-stone-600 line-clamp-2">
+                        {card.primary_definition}
+                      </p>
+
+                      {card.source_context?.sentence && (
+                        <blockquote className="text-[11px] font-serif italic text-stone-700 border-l-2 border-[#834832]/50 pl-2 line-clamp-2">
+                          “{card.source_context.sentence}”
+                        </blockquote>
+                      )}
+                    </div>
+
+                    <div className="pt-2 border-t border-stone-200/60 flex items-center justify-between text-[11px] font-sans text-stone-500">
+                      <span>
+                        {card.source_context?.page ? `p. ${card.source_context.page}` : getCardStateLabel(card.srs.state)}
+                      </span>
+                      <span className="text-[#834832] font-semibold group-hover:underline">
+                        Inspect →
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
       ) : (
-        /* --- VIEW 3: INTERACTIVE MORPHEME NETWORK GRAPH --- */
+        /* --- VIEW 4: INTERACTIVE MORPHEME NETWORK GRAPH --- */
         <MorphemeGraph cards={filteredCards} />
       )}
+
+      {/* Slide-Over Card Inspector Drawer */}
+      <CardInspectorDrawer
+        card={cards.find((c) => c.id === selectedCardId) || null}
+        onClose={() => setSelectedCardId(null)}
+        onCardUpdated={(updated) => {
+          setCards((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+        }}
+        onCardDeleted={(deletedId) => {
+          setCards((prev) => prev.filter((c) => c.id !== deletedId));
+          setSelectedCardId(null);
+        }}
+      />
     </div>
   );
 }

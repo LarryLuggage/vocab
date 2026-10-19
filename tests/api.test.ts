@@ -156,17 +156,32 @@ describe('Lexis Engine API Route Handlers', () => {
   });
 
   describe('GET, PATCH, DELETE /api/cards/[id]', () => {
-    it('gets a single card by id', async () => {
+    it('gets a single card by id with productionLogs array', async () => {
       const listReq = new NextRequest('http://localhost:3000/api/cards');
       const listRes = await getCardsHandler(listReq);
       const listJson = await listRes.json();
-      const firstId = listJson.data[0].id;
+      const targetCard = listJson.data.find((c: any) => c.term === 'perspicacious')!;
 
-      const req = new NextRequest(`http://localhost:3000/api/cards/${firstId}`);
-      const res = await getCardByIdHandler(req, { params: Promise.resolve({ id: firstId }) });
+      const prodReq = new NextRequest('http://localhost:3000/api/validate-production', {
+        method: 'POST',
+        body: JSON.stringify({
+          term: targetCard.term,
+          cardId: targetCard.id,
+          userSentence: 'Her perspicacious critique uncovered the latent flaw.',
+        }),
+      });
+      await validateProductionHandler(prodReq);
+
+      const req = new NextRequest(`http://localhost:3000/api/cards/${targetCard.id}`);
+      const res = await getCardByIdHandler(req, { params: Promise.resolve({ id: targetCard.id }) });
       expect(res.status).toBe(200);
       const json = await res.json();
-      expect(json.data.id).toBe(firstId);
+      expect(json.data.id).toBe(targetCard.id);
+      expect(Array.isArray(json.productionLogs)).toBe(true);
+      expect(json.productionLogs.length).toBe(1);
+      expect(json.productionLogs[0].user_sentence).toBe(
+        'Her perspicacious critique uncovered the latent flaw.'
+      );
     });
 
     it('returns 404 for non-existent card', async () => {
@@ -194,6 +209,82 @@ describe('Lexis Engine API Route Handlers', () => {
       expect(res.status).toBe(200);
       const json = await res.json();
       expect(json.data.source_context.sentence).toContain('Additional literary excerpt.');
+    });
+
+    it('patches editable fields while preserving srs scheduling data', async () => {
+      const listReq = new NextRequest('http://localhost:3000/api/cards');
+      const listRes = await getCardsHandler(listReq);
+      const listJson = await listRes.json();
+      const targetCard = listJson.data[0];
+
+      const req = new NextRequest(`http://localhost:3000/api/cards/${targetCard.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          primary_definition: 'Updated scholarly definition for lexical inspection.',
+          nuance_note: 'Refined stylistic nuance note.',
+          source_context: {
+            sentence: 'Curated citation from primary manuscript.',
+            source: 'Codex Sinaiticus',
+            author: 'Anonymous Scribe',
+          },
+        }),
+      });
+      const res = await patchCardHandler(req, {
+        params: Promise.resolve({ id: targetCard.id }),
+      });
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.success).toBe(true);
+      expect(json.data.primary_definition).toBe(
+        'Updated scholarly definition for lexical inspection.'
+      );
+      expect(json.data.nuance_note).toBe('Refined stylistic nuance note.');
+      expect(json.data.source_context.source).toBe('Codex Sinaiticus');
+      expect(json.data.source_context.author).toBe('Anonymous Scribe');
+      expect(json.data.srs).toBeDefined();
+      expect(json.data.srs.reps).toBe(targetCard.srs.reps);
+    });
+
+    it('re-enriches a fallback card via PATCH { reenrich: true } while preserving source_context and srs', async () => {
+      const listReq = new NextRequest('http://localhost:3000/api/cards');
+      const listRes = await getCardsHandler(listReq);
+      const listJson = await listRes.json();
+      const targetCard = listJson.data.find((c: any) => c.term === 'perspicacious')!;
+
+      // Simulate a stub/fallback state on the card first
+      const degradeReq = new NextRequest(`http://localhost:3000/api/cards/${targetCard.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          primary_definition: 'Temporary stub definition',
+          is_fallback: true,
+          enrichment_source: 'local_stub',
+          source_context: {
+            sentence: 'Preserved original context sentence.',
+            source: 'Collected Essays',
+            author: 'M. Montaigne',
+          },
+        }),
+      });
+      await patchCardHandler(degradeReq, { params: Promise.resolve({ id: targetCard.id }) });
+
+      const reenrichReq = new NextRequest(`http://localhost:3000/api/cards/${targetCard.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ reenrich: true }),
+      });
+      const res = await patchCardHandler(reenrichReq, {
+        params: Promise.resolve({ id: targetCard.id }),
+      });
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.success).toBe(true);
+      expect(json.reenriched).toBe(true);
+      expect(json.data.primary_definition).not.toBe('Temporary stub definition');
+      expect(json.data.etymology.roots.length).toBeGreaterThan(0);
+      expect(json.data.source_context.sentence).toBe('Preserved original context sentence.');
+      expect(json.data.source_context.source).toBe('Collected Essays');
+      expect(json.data.source_context.author).toBe('M. Montaigne');
+      expect(json.data.srs).toBeDefined();
+      expect(json.data.srs.reps).toBe(targetCard.srs.reps);
     });
 
     it('deletes a card by id', async () => {
