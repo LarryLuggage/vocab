@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { listCards, bulkCreateCards, BulkCardInput, DEFAULT_USER_ID } from '@/lib/db';
 import { SPANISH_LITERARY_SEED_CARDS } from '@/lib/db/spanish-seed-data';
 import { PHILOSOPHICAL_SEED_CARDS } from '@/lib/db/philosophical-seed-data';
+import { findCuratedPackById } from '@/lib/db/thematic-packs';
 import { CardWithSrs } from '@/types/lexis';
 
 export async function POST(req: NextRequest) {
@@ -15,12 +16,11 @@ export async function POST(req: NextRequest) {
     const existingIds = new Set(existing.map((c) => c.id));
 
     let candidates: CardWithSrs[] = [];
-    if (rawPack === 'en-philosophical' || rawPack === 'en') {
-      candidates = PHILOSOPHICAL_SEED_CARDS;
-    } else if (rawPack === 'all') {
+    if (rawPack === 'all') {
       candidates = [...SPANISH_LITERARY_SEED_CARDS, ...PHILOSOPHICAL_SEED_CARDS];
     } else {
-      candidates = SPANISH_LITERARY_SEED_CARDS;
+      const matchedPack = findCuratedPackById(rawPack);
+      candidates = matchedPack ? matchedPack.cards : SPANISH_LITERARY_SEED_CARDS;
     }
 
     const toInsert: BulkCardInput[] = [];

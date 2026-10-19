@@ -162,7 +162,12 @@ CREATE INDEX IF NOT EXISTS idx_vocab_term ON vocab_cards (term);
   - Global `⌘K` / `Ctrl+K` keyboard shortcut in `components/Navbar.tsx` routing directly to `/add` and focusing `#term-input`.
 
 - **Phase 5: Multi-Word Synthesis Studio (`ACT-04`), FSRS Retention Analytics (`SRS-05`) & Spanish Literary Curriculum (`CUR-02`) (Complete)**:
-  - Multi-Word Synthesis Studio (`ACT-04: Synthesis Weave`) on `/review` challenging users to weave 2–3 due vocabulary words into a single cohesive philosophical/literary passage with live word-detection chips and multi-term evaluation (`POST /api/validate-production`).
+  - Multi-Word Synthesis Studio (`ACT-04: Synthesis Weave`) on `/review` challenging users to weave 2–3 due vocabulary words into a single cohesive philosophical/literary passage with live word-detection chips, multi-term evaluation (`POST /api/validate-production`), and batch FSRS grading (`POST /api/review`).
   - FSRS 14-Day Retention Forecast & Memory Analytics (`components/RetentionAnalytics.tsx`, `/lexicon?view=analytics`) featuring a 14-day stacked EN/ES workload forecast chart, Mean Stability ($S$) & Difficulty ($D$) KPIs, maturity distribution, and a High-Difficulty / Leech watchlist.
-  - Curated 25-term High-Register Spanish Literary & Philosophical Seed Pack (`lib/db/spanish-seed-data.ts`, `POST /api/cards/seed`) with citations from Borges, Ortega y Gasset, Unamuno, Paz, Cortázar, Sor Juana, Reyes, and Zambrano, plus 1-click curriculum seeding on `/lexicon`.
+  - Curated 25-term High-Register Spanish Literary & Philosophical Seed Pack (`lib/db/spanish-seed-data.ts`, `POST /api/cards/seed`) with citations from Borges, Ortega y Gasset, Unamuno, Paz, Cortázar, Sor Juana, Reyes, and Zambrano, plus 1-click single-batch curriculum seeding on `/lexicon`.
+
+- **Phase 6: Reader Passage & Highlight Bulk Extractor (`ING-09`) & Custom Pack Studio (`CUR-03`) (Complete)**:
+  - Reader Passage & Book Highlight Bulk Extractor (`/add?mode=passage`, `lib/llm/passage-extractor.ts`, `POST /api/extract-passage`, `POST /api/cards/batch`) allowing users to paste long-form essays or multi-highlight blocks, auto-extract C1/C2 candidates with exact passage sentences and Zotero/book citations, and batch-ingest novel cards while merging sightings into existing cards.
+  - Custom Curated Pack Studio & Topic Generator (`components/CustomPackModal.tsx`, `lib/db/thematic-packs.ts`, `lib/llm/pack-generator.ts`, `GET & POST /api/cards/packs`) adding 4 new 10-card Thematic Domain Packs (*Aesthetics & Poetics*, *Political Economy & Critical Theory*, *Phenomenology & Mind*, and *Boom Latinoamericano & Realismo Mágico*) plus an AI Topic Generator for custom EN/ES domain packs.
+
 
