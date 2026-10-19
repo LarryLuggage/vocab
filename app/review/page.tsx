@@ -41,9 +41,25 @@ import {
   validateSynthesisPassage,
 } from '@/lib/production-validator';
 import { normalizeDiacritics, formatGenderBadge } from '@/lib/language';
-import { cn } from '@/lib/utils';
+import { cn, extractClozeToken } from '@/lib/utils';
 
 type ModalityMode = 'ACT-01' | 'ACT-02' | 'ACT-03' | 'ACT-04';
+
+function deterministicShuffle<T>(items: T[], seedStr: string): T[] {
+  const arr = [...items];
+  let hash = 2166136261;
+  for (let i = 0; i < seedStr.length; i++) {
+    hash ^= seedStr.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  for (let i = arr.length - 1; i > 0; i--) {
+    hash ^= i + 0x9e3779b9;
+    hash = Math.imul(hash, 16777619);
+    const j = Math.abs(hash) % (i + 1);
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
 
 function CardFullDetails({
   card,
@@ -263,6 +279,7 @@ export default function ReviewPage() {
   const [activeModality, setActiveModality] = useState<ModalityMode>('ACT-01');
 
   // Modality 1: Cloze state
+  const [clozeSentenceIndex, setClozeSentenceIndex] = useState(0);
   const [clozeInput, setClozeInput] = useState('');
   const [clozeChecked, setClozeChecked] = useState(false);
   const [clozeIsCorrect, setClozeIsCorrect] = useState<boolean | null>(null);
@@ -288,6 +305,7 @@ export default function ReviewPage() {
   const [synthesisResult, setSynthesisResult] =
     useState<ProductionValidationResult | null>(null);
   const [showSynthesisDrawer, setShowSynthesisDrawer] = useState(false);
+  const [gradeAllSynthesisCards, setGradeAllSynthesisCards] = useState(true);
 
   // Strict Answer Masking state (spoiler prevention)
   const [isAnswerRevealed, setIsAnswerRevealed] = useState(false);
@@ -415,6 +433,8 @@ export default function ReviewPage() {
 
   // Reset modality inputs & answer masking whenever the active card changes
   useEffect(() => {
+    const sentenceCount = currentCard?.cloze_sentences?.length || 1;
+    setClozeSentenceIndex((currentCard?.srs.reps ?? 0) % sentenceCount);
     setClozeInput('');
     setClozeChecked(false);
     setClozeIsCorrect(null);
@@ -428,7 +448,7 @@ export default function ReviewPage() {
     setShowSynthesisDrawer(false);
     setIsAnswerRevealed(false);
     setShowSandboxHints(false);
-  }, [currentIndex, currentCard?.id]);
+  }, [currentIndex, currentCard?.id, currentCard?.srs.reps, currentCard?.cloze_sentences?.length]);
 
   // Handle explicit answer revelation
   const handleRevealAnswer = useCallback(() => {
@@ -474,6 +494,7 @@ export default function ReviewPage() {
   // Distinction matrix dynamic question and options
   const distinctionData = useMemo(() => {
     if (!currentCard) return null;
+    const seed = `${currentCard.id}:${currentCard.srs.reps}:${currentIndex}`;
 
     if (currentCard.distinction_matrix) {
       const matrix = currentCard.distinction_matrix;
@@ -482,11 +503,16 @@ export default function ReviewPage() {
           (r) => r.word.toLowerCase() === currentCard.term.toLowerCase()
         ) || matrix.contextRecommendations[0];
 
+      const rawOptions =
+        matrix.synonyms && matrix.synonyms.length > 0
+          ? matrix.synonyms
+          : [currentCard.term, 'general synonym', 'colloquial parallel'];
+
       return {
         promptTone: targetRecommendation
           ? targetRecommendation.recommendedRegister
           : 'High Literary & Scholarly Register',
-        options: matrix.synonyms,
+        options: deterministicShuffle(rawOptions, seed),
         correctWord: currentCard.term,
         comparison: matrix.nuanceComparison,
         recommendations: matrix.contextRecommendations,
@@ -494,9 +520,10 @@ export default function ReviewPage() {
     }
 
     // Fallback distinction trio if not explicitly pre-configured
+    const fallbackOptions = [currentCard.term, 'general synonym', 'colloquial parallel'];
     return {
       promptTone: 'High Literary & Scholarly Register',
-      options: [currentCard.term, 'general synonym', 'colloquial parallel'],
+      options: deterministicShuffle(fallbackOptions, seed),
       correctWord: currentCard.term,
       comparison: `"${currentCard.term}" provides refined connotative precision suitable for literary and academic prose.`,
       recommendations: [
@@ -507,7 +534,7 @@ export default function ReviewPage() {
         },
       ],
     };
-  }, [currentCard]);
+  }, [currentCard, currentIndex]);
 
   // Handle distinction selection
   const handleSelectSynonym = (chosenWord: string) => {
@@ -615,12 +642,24 @@ export default function ReviewPage() {
   const handleRateCard = async (rating: FSRSRating) => {
     if (!currentCard || isSavingRating) return;
 
+    const isBatchSynthesis =
+      activeModality === 'ACT-04' &&
+      gradeAllSynthesisCards &&
+      synthesisCards.length > 1;
+    const targetIds = isBatchSynthesis
+      ? synthesisCards.map((c) => c.id)
+      : [currentCard.id];
+
     setIsSavingRating(true);
     setRatingError(null);
     try {
       await apiFetch('/api/review', {
         method: 'POST',
-        body: JSON.stringify({ cardId: currentCard.id, rating }),
+        body: JSON.stringify({
+          cardId: currentCard.id,
+          cardIds: targetIds,
+          rating,
+        }),
       });
     } catch (err) {
       setRatingError(`Rating not saved: ${errorMessageOf(err, 'unknown error')}. Try again.`);
@@ -630,7 +669,28 @@ export default function ReviewPage() {
     }
 
     notifyCardsUpdated();
-    setReviewedCount((prev) => prev + 1);
+    setReviewedCount((prev) => prev + targetIds.length);
+
+    if (isBatchSynthesis) {
+      const companionIdSet = new Set(synthesisCards.slice(1).map((c) => c.id));
+      const laterCompanionIds = new Set(
+        queue
+          .slice(currentIndex + 1)
+          .filter((c) => companionIdSet.has(c.id))
+          .map((c) => c.id)
+      );
+
+      if (laterCompanionIds.size > 0) {
+        const nextQueueLength = queue.length - laterCompanionIds.size;
+        setRawQueue((prev) => prev.filter((c) => !laterCompanionIds.has(c.id)));
+        if (currentIndex + 1 < nextQueueLength) {
+          setCurrentIndex((prev) => prev + 1);
+        } else {
+          setSessionCompleted(true);
+        }
+        return;
+      }
+    }
 
     // Move to next card or complete session
     if (currentIndex + 1 < queue.length) {
@@ -828,9 +888,13 @@ export default function ReviewPage() {
   }
 
   // Cloze sentence for ACT-01
-  const clozeRaw =
+  const activeClozeSentence =
+    currentCard.cloze_sentences?.[
+      clozeSentenceIndex % Math.max(1, currentCard.cloze_sentences.length)
+    ] ||
     currentCard.cloze_sentences?.[0] ||
-    `The author deployed the concept of {{${currentCard.term}}} to illuminate the discourse.`;
+    `The concept of {{${currentCard.term}}} is central to this inquiry.`;
+  const clozeRaw = activeClozeSentence;
   const clozeDisplay = clozeRaw.replace(/{{([^}]+)}}/g, '_______');
 
   return (
@@ -1025,12 +1089,30 @@ export default function ReviewPage() {
         {activeModality === 'ACT-01' && (
           <div className="space-y-6">
             <div className="space-y-2">
-              <span className="text-xs font-sans font-semibold uppercase tracking-wider text-[#a8a29e]">
-                Fill the Missing Word
-              </span>
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-xs font-sans font-semibold uppercase tracking-wider text-[#a8a29e]">
+                  Fill the Missing Word
+                </span>
+                {(currentCard.cloze_sentences?.length ?? 0) > 1 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setClozeSentenceIndex(
+                        (prev) => (prev + 1) % currentCard.cloze_sentences.length
+                      )
+                    }
+                    className="px-2.5 py-1 rounded-full bg-stone-100 hover:bg-[#f2e8e5] border border-stone-200 hover:border-[#834832]/40 text-[11px] font-sans font-semibold text-[#834832] transition-colors cursor-pointer"
+                  >
+                    Context{' '}
+                    {(clozeSentenceIndex % currentCard.cloze_sentences.length) + 1} of{' '}
+                    {currentCard.cloze_sentences.length} • Cycle ↻
+                  </button>
+                )}
+              </div>
               <p className="text-xl sm:text-2xl font-serif text-[#1c1917] leading-relaxed">
                 {clozeRaw.split(/({{[^}]+}})/g).map((part, idx) => {
                   if (part.startsWith('{{') && part.endsWith('}}')) {
+                    const hiddenWord = extractClozeToken(part);
                     return (
                       <span
                         key={idx}
@@ -1043,7 +1125,7 @@ export default function ReviewPage() {
                             : 'bg-stone-100 border-[#834832] text-[#834832]'
                         )}
                       >
-                        {clozeChecked || isAnswerRevealed ? part.slice(2, -2) : '_______'}
+                        {clozeChecked || isAnswerRevealed ? hiddenWord : '_______'}
                       </span>
                     );
                   }
@@ -1805,6 +1887,41 @@ export default function ReviewPage() {
           <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-center gap-2.5 text-rose-900 text-xs font-sans">
             <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0" />
             <span>{ratingError}</span>
+          </div>
+        )}
+
+        {activeModality === 'ACT-04' && synthesisCards.length > 1 && (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 rounded-xl bg-[#fdf8f6] border border-[#eaddd7] text-xs font-sans">
+            <button
+              type="button"
+              onClick={() => setGradeAllSynthesisCards((prev) => !prev)}
+              className="flex items-center gap-2 text-left text-[#4f2416] font-medium cursor-pointer"
+            >
+              <span
+                className={cn(
+                  'w-4 h-4 rounded flex items-center justify-center border transition-colors shrink-0',
+                  gradeAllSynthesisCards
+                    ? 'bg-[#834832] border-[#834832] text-white'
+                    : 'bg-white border-stone-300 text-transparent'
+                )}
+              >
+                ✓
+              </span>
+              <span>
+                {gradeAllSynthesisCards
+                  ? `Batch FSRS Grade: Apply rating to all ${
+                      synthesisCards.length
+                    } woven words (${synthesisCards.map((c) => c.term).join(', ')})`
+                  : `Single Card Grade: Only rate ${currentCard.term}`}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setGradeAllSynthesisCards((prev) => !prev)}
+              className="self-start sm:self-auto px-2.5 py-1 rounded-lg bg-white hover:bg-stone-50 border border-[#eaddd7] text-[#834832] font-semibold text-[11px] transition-colors shrink-0 cursor-pointer"
+            >
+              {gradeAllSynthesisCards ? 'Switch to Single Card' : 'Switch to Batch Grade'}
+            </button>
           </div>
         )}
 

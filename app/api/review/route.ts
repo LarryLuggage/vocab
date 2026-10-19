@@ -65,10 +65,23 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const { cardId, rating, reviewTime, userId = DEFAULT_USER_ID } = body;
+    const { cardId, cardIds, rating, reviewTime, userId = DEFAULT_USER_ID } = body;
 
-    if (!cardId || typeof cardId !== 'string') {
-      return NextResponse.json({ error: 'Valid cardId is required.' }, { status: 400 });
+    const rawCardIds: string[] =
+      Array.isArray(cardIds) && cardIds.length > 0
+        ? cardIds
+            .filter((id: unknown): id is string => typeof id === 'string' && id.trim().length > 0)
+            .map((id: string) => id.trim())
+        : typeof cardId === 'string' && cardId.trim().length > 0
+        ? [cardId.trim()]
+        : [];
+    const targetCardIds = Array.from(new Set(rawCardIds));
+
+    if (targetCardIds.length === 0) {
+      return NextResponse.json(
+        { error: 'Valid cardId (or cardIds) is required.' },
+        { status: 400 }
+      );
     }
 
     if (!rating || ![1, 2, 3, 4].includes(rating)) {
@@ -79,22 +92,55 @@ export async function POST(req: NextRequest) {
     }
 
     const reviewDate = reviewTime ? new Date(reviewTime) : new Date();
-    const result = await recordReview(cardId, rating as FSRSRating, reviewDate, userId);
+    const batchResults: Array<{
+      cardId: string;
+      term: string;
+      previousState: number;
+      updatedSrs: any;
+      card: any;
+      recordLog: any;
+      intervalDays: number;
+    }> = [];
 
-    if (!result) {
-      return NextResponse.json(
-        { error: `Card with id "${cardId}" not found for review update.` },
-        { status: 404 }
-      );
+    for (let i = 0; i < targetCardIds.length; i++) {
+      const targetId = targetCardIds[i];
+      const existing = await getCardById(targetId, userId);
+      if (!existing) {
+        if (i === 0) {
+          return NextResponse.json(
+            { error: `Card with id "${targetId}" not found for review update.` },
+            { status: 404 }
+          );
+        }
+        continue;
+      }
+
+      const previousState = existing.srs.state;
+      const result = await recordReview(targetId, rating as FSRSRating, reviewDate, userId);
+      if (result) {
+        batchResults.push({
+          cardId: result.card.id,
+          term: result.card.term,
+          previousState,
+          updatedSrs: result.card.srs,
+          card: result.card,
+          recordLog: result.recordLog,
+          intervalDays: result.card.srs.scheduled_days,
+        });
+      }
     }
 
-    const previews = getSchedulePreviews(result.card.srs, reviewDate);
+    const primary = batchResults[0];
+    const previews = getSchedulePreviews(primary.card.srs, reviewDate);
 
     return NextResponse.json({
       success: true,
-      card: result.card,
+      card: primary.card,
+      data: primary.card,
       schedulePreviews: previews,
-      recordLog: result.recordLog,
+      recordLog: primary.recordLog,
+      batchCount: batchResults.length,
+      batchResults,
     });
   } catch (error: any) {
     console.error('[API POST /api/review] Error:', error);

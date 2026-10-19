@@ -24,7 +24,7 @@ import { CardWithSrs, ProductionLog } from '@/types/lexis';
 import { apiFetch, errorMessageOf, notifyCardsUpdated } from '@/lib/api-client';
 import { getCardStateLabel, formatIntervalDisplay } from '@/lib/fsrs';
 import { formatGenderBadge } from '@/lib/language';
-import { cn } from '@/lib/utils';
+import { cn, extractClozeToken } from '@/lib/utils';
 
 export interface CardInspectorDrawerProps {
   card: CardWithSrs | null;
@@ -51,7 +51,7 @@ function renderClozeHighlighted(sentence: string) {
   const parts = sentence.split(/(\{\{.*?\}\})/g);
   return parts.map((part, idx) => {
     if (part.startsWith('{{') && part.endsWith('}}')) {
-      const target = part.slice(2, -2);
+      const target = extractClozeToken(part);
       return (
         <span
           key={idx}

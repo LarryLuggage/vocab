@@ -49,11 +49,48 @@ function getDeterministicUuid(index) {
   return `00000000-0000-0000-0000-00000000${hex}`;
 }
 
+function getSpanishDeterministicUuid(index) {
+  const hex = (index + 1).toString().padStart(4, '0');
+  return `10000000-0000-0000-0000-00000000${hex}`;
+}
+
+function loadSpanishLiteraryTerms() {
+  const tsPath = path.join(projectRoot, 'lib', 'db', 'spanish-seed-data.ts');
+  if (!fs.existsSync(tsPath)) return [];
+  const raw = fs.readFileSync(tsPath, 'utf-8');
+  const startMarker = 'const RAW_SPANISH_LITERARY_TERMS: SpanishSeedBase[] = ';
+  const endMarker = '\nexport function getSpanishLiterarySeedCards';
+  const startIdx = raw.indexOf(startMarker);
+  const endIdx = raw.indexOf(endMarker);
+  if (startIdx === -1 || endIdx === -1) return [];
+  const arrayExpr = raw
+    .slice(startIdx + startMarker.length, endIdx)
+    .trim()
+    .replace(/;$/, '');
+  const fn = new Function(`return (${arrayExpr});`);
+  return fn();
+}
+
+function parsePackArg(args) {
+  const eqArg = args.find((a) => a.startsWith('--pack='));
+  if (eqArg) {
+    const val = eqArg.split('=')[1]?.toLowerCase().trim();
+    if (val === 'en' || val === 'es' || val === 'all') return val;
+  }
+  const packIdx = args.indexOf('--pack');
+  if (packIdx !== -1 && args[packIdx + 1]) {
+    const val = args[packIdx + 1].toLowerCase().trim();
+    if (val === 'en' || val === 'es' || val === 'all') return val;
+  }
+  return 'all';
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const isHelp = args.includes('--help') || args.includes('-h');
   const isDryRun = args.includes('--dry-run');
   const isSqlOnly = args.includes('--sql');
+  const pack = parsePackArg(args);
 
   const userIdx = args.indexOf('--user');
   const targetUserId = userIdx !== -1 && args[userIdx + 1]
@@ -61,7 +98,7 @@ async function main() {
     : '00000000-0000-0000-0000-000000000000';
 
   console.log('===========================================================');
-  console.log('   Lexis Engine — 100-Term Philosophical Seed Runner       ');
+  console.log('   Lexis Engine — Curated Curriculum Seed Runner           ');
   console.log('===========================================================');
 
   if (isHelp) {
@@ -71,10 +108,14 @@ Usage:
   pnpm db:seed [options]
 
 Options:
-  --user <uuid>   Set the target user UUID (default: 00000000-0000-0000-0000-000000000000)
-  --dry-run       Validate cards without performing database writes
-  --sql           Display the location and command for supabase/seed.sql
-  --help, -h      Show this help message
+  --pack <en|es|all>  Select vocabulary pack to seed (default: all)
+                        • en  : 100-Term English Philosophical & Literary Pack
+                        • es  : 25-Term Spanish Literary & Philosophical Pack
+                        • all : Both English (100) + Spanish (25) packs (125 total)
+  --user <uuid>       Set the target user UUID (default: 00000000-0000-0000-0000-000000000000)
+  --dry-run           Validate cards without performing database writes
+  --sql               Display the location and command for supabase/seed.sql
+  --help, -h          Show this help message
 `);
     process.exit(0);
   }
@@ -87,7 +128,18 @@ Options:
     process.exit(0);
   }
 
-  console.log(`Loaded ${ALL_100_TERMS.length} curated philosophical & literary terms.`);
+  const spanishTerms = pack === 'es' || pack === 'all' ? loadSpanishLiteraryTerms() : [];
+  const englishTerms = pack === 'en' || pack === 'all' ? ALL_100_TERMS : [];
+  const totalSelected = englishTerms.length + spanishTerms.length;
+
+  console.log(`Selected Pack: --pack ${pack}`);
+  if (englishTerms.length > 0) {
+    console.log(`  • English Philosophical & Literary Pack: ${englishTerms.length} terms (lib/db/seed-data.ts & lib/db/philosophical-seed-data.ts)`);
+  }
+  if (spanishTerms.length > 0) {
+    console.log(`  • Spanish Literary & Philosophical Pack: ${spanishTerms.length} terms (lib/db/spanish-seed-data.ts)`);
+  }
+  console.log(`Total Curated Terms to Seed: ${totalSelected}`);
   console.log(`Target User ID: ${targetUserId}`);
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -111,16 +163,15 @@ Options:
     console.log('  1. Add your credentials to .env.local:');
     console.log('       NEXT_PUBLIC_SUPABASE_URL=https://<your-project>.supabase.co');
     console.log('       SUPABASE_SERVICE_ROLE_KEY=<your-service-role-key>');
-    console.log('  2. Run: pnpm db:seed');
+    console.log('  2. Run: pnpm db:seed --pack all');
     console.log('');
-    console.log('Option 2 (Supabase SQL Editor - Instant 1-Click):');
-    console.log('  1. Open your Supabase Dashboard: https://supabase.com/dashboard');
-    console.log('  2. Navigate to SQL Editor -> New Query');
-    console.log(`  3. Paste the contents of supabase/seed.sql`);
-    console.log('  4. Click "Run"');
+    console.log('Option 2 (In-App 1-Click Seeding or SQL Editor):');
+    console.log('  • Use POST /api/cards/seed with { "pack": "en" | "es" | "all" }');
+    console.log(`  • Or paste supabase/seed.sql into the Supabase SQL Editor.`);
     console.log('-----------------------------------------------------------');
-    console.log(`All 100 terms are also statically typed in:`);
-    console.log(`  -> lib/db/philosophical-seed-data.ts\n`);
+    console.log(`Static TypeScript seed modules verified:`);
+    console.log(`  -> lib/db/philosophical-seed-data.ts (100 English terms)`);
+    console.log(`  -> lib/db/spanish-seed-data.ts (25 Spanish terms)\n`);
     process.exit(0);
   }
 
@@ -128,7 +179,7 @@ Options:
   const supabase = createClient(supabaseUrl, supabaseKey);
 
   if (isDryRun) {
-    console.log('[Dry Run] Credentials verified. Skipping actual database insertion.');
+    console.log(`[Dry Run] Credentials verified for ${totalSelected} terms (--pack ${pack}). Skipping actual database insertion.`);
     process.exit(0);
   }
 
@@ -139,23 +190,23 @@ Options:
   const vocabInserts = [];
   const srsInserts = [];
 
-  for (let i = 0; i < ALL_100_TERMS.length; i++) {
-    const termData = ALL_100_TERMS[i];
+  for (let i = 0; i < englishTerms.length; i++) {
+    const termData = englishTerms[i];
     const cardId = getDeterministicUuid(i);
     const batchIndex = Math.floor(i / 10); // 0 to 9
 
-    let dueDate;
-    if (batchIndex === 0) {
-      dueDate = new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString();
-    } else {
-      dueDate = new Date(now.getTime() + batchIndex * 24 * 60 * 60 * 1000).toISOString();
-    }
+    const dueDate =
+      batchIndex === 0
+        ? new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString()
+        : new Date(now.getTime() + batchIndex * 24 * 60 * 60 * 1000).toISOString();
 
     vocabInserts.push({
       id: cardId,
       user_id: targetUserId,
       term: termData.term,
       language: 'en',
+      gender: null,
+      english_gloss: null,
       part_of_speech: termData.part_of_speech,
       phonetic: termData.phonetic,
       primary_definition: termData.primary_definition,
@@ -189,7 +240,56 @@ Options:
     });
   }
 
-  console.log(`Inserting 100 vocab cards in batches of 25...`);
+  for (let i = 0; i < spanishTerms.length; i++) {
+    const termData = spanishTerms[i];
+    const cardId = getSpanishDeterministicUuid(i);
+    const batchDay = Math.floor(i / 5); // 0 to 4
+
+    const dueDate = new Date(
+      now.getTime() + batchDay * 24 * 60 * 60 * 1000 - (batchDay === 0 ? 60 * 60 * 1000 : 0)
+    ).toISOString();
+
+    vocabInserts.push({
+      id: cardId,
+      user_id: targetUserId,
+      term: termData.term,
+      language: 'es',
+      gender: termData.gender || null,
+      english_gloss: termData.english_gloss || null,
+      part_of_speech: termData.part_of_speech,
+      phonetic: termData.phonetic,
+      primary_definition: termData.primary_definition,
+      nuance_note: termData.nuance_note,
+      etymology: termData.etymology,
+      collocations: termData.collocations,
+      source_context: {
+        sentence: termData.source_context.sentence,
+        source: termData.source_context.source,
+        author: termData.source_context.author || null,
+      },
+      cloze_sentences: termData.cloze_sentences,
+      distinction_matrix: termData.distinction_matrix,
+      is_fallback: false,
+      enrichment_source: 'curated',
+      created_at: baseTimestamp,
+    });
+
+    srsInserts.push({
+      card_id: cardId,
+      user_id: targetUserId,
+      due: dueDate,
+      stability: batchDay === 0 ? 0 : batchDay * 2.5,
+      difficulty: 4.5,
+      elapsed_days: batchDay,
+      scheduled_days: batchDay,
+      reps: batchDay === 0 ? 0 : 1,
+      lapses: 0,
+      state: batchDay === 0 ? 0 : 2,
+      last_review: batchDay === 0 ? null : baseTimestamp,
+    });
+  }
+
+  console.log(`Inserting ${vocabInserts.length} vocab cards in batches of 25...`);
   const batchSize = 25;
   for (let i = 0; i < vocabInserts.length; i += batchSize) {
     const chunk = vocabInserts.slice(i, i + batchSize);
@@ -198,11 +298,11 @@ Options:
       console.error(`[Error] Failed to upsert vocab_cards chunk ${i / batchSize + 1}:`, error.message);
       process.exit(1);
     }
-    process.stdout.write(`  [Vocab Cards] ${Math.min(i + batchSize, vocabInserts.length)}/100 upserted...\r`);
+    process.stdout.write(`  [Vocab Cards] ${Math.min(i + batchSize, vocabInserts.length)}/${vocabInserts.length} upserted...\r`);
   }
-  console.log('\n  ✓ 100/100 vocab cards upserted successfully.');
+  console.log(`\n  ✓ ${vocabInserts.length}/${vocabInserts.length} vocab cards upserted successfully.`);
 
-  console.log(`Inserting 100 SRS scheduling states in batches of 25...`);
+  console.log(`Inserting ${srsInserts.length} SRS scheduling states in batches of 25...`);
   for (let i = 0; i < srsInserts.length; i += batchSize) {
     const chunk = srsInserts.slice(i, i + batchSize);
     const { error } = await supabase.from('srs_cards').upsert(chunk, { onConflict: 'card_id' });
@@ -210,16 +310,12 @@ Options:
       console.error(`[Error] Failed to upsert srs_cards chunk ${i / batchSize + 1}:`, error.message);
       process.exit(1);
     }
-    process.stdout.write(`  [SRS Cards] ${Math.min(i + batchSize, srsInserts.length)}/100 upserted...\r`);
+    process.stdout.write(`  [SRS Cards] ${Math.min(i + batchSize, srsInserts.length)}/${srsInserts.length} upserted...\r`);
   }
-  console.log('\n  ✓ 100/100 SRS cards upserted successfully.');
+  console.log(`\n  ✓ ${srsInserts.length}/${srsInserts.length} SRS cards upserted successfully.`);
 
   console.log('\n===========================================================');
   console.log('   🎉 Database seeding completed successfully!             ');
-  console.log('===========================================================');
-  console.log(`  • 10 cards due immediately in /review (Batch 0: Epistemology)`);
-  console.log(`  • 90 cards staggered over the next 9 days (10 cards/day)`);
-  console.log(`  • Complete Greek/Latin/French roots, cloze drills & distinction matrices.`);
   console.log('===========================================================\n');
 }
 
