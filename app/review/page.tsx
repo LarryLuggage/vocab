@@ -42,6 +42,7 @@ import {
 } from '@/lib/production-validator';
 import { normalizeDiacritics, formatGenderBadge } from '@/lib/language';
 import { cn, extractClozeToken } from '@/lib/utils';
+import { buildDistinctionQuiz, gradeDistinctionChoice } from '@/lib/distinction-quiz';
 import {
   REVIEW_MODALITIES,
   REVIEW_MODALITY_LABELS,
@@ -58,22 +59,6 @@ import {
 } from '@/lib/review-mix';
 
 type ModalityMode = ReviewModality;
-
-function deterministicShuffle<T>(items: T[], seedStr: string): T[] {
-  const arr = [...items];
-  let hash = 2166136261;
-  for (let i = 0; i < seedStr.length; i++) {
-    hash ^= seedStr.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  for (let i = arr.length - 1; i > 0; i--) {
-    hash ^= i + 0x9e3779b9;
-    hash = Math.imul(hash, 16777619);
-    const j = Math.abs(hash) % (i + 1);
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
 
 function CardFullDetails({
   card,
@@ -520,58 +505,19 @@ export default function ReviewPage() {
     setAttemptStats((prev) => recordReviewAttempt(prev, 'ACT-01', isMatch));
   };
 
-  // Distinction matrix dynamic question and options
+  // Distinction matrix question. Choices are shuffled once per card; the
+  // correct answer is the term itself, not a fixed button index.
   const distinctionData = useMemo(() => {
     if (!currentCard) return null;
-    const seed = `${currentCard.id}:${currentCard.srs.reps}:${currentIndex}`;
-
-    if (currentCard.distinction_matrix) {
-      const matrix = currentCard.distinction_matrix;
-      const targetRecommendation =
-        matrix.contextRecommendations.find(
-          (r) => r.word.toLowerCase() === currentCard.term.toLowerCase()
-        ) || matrix.contextRecommendations[0];
-
-      const rawOptions =
-        matrix.synonyms && matrix.synonyms.length > 0
-          ? matrix.synonyms
-          : [currentCard.term, 'general synonym', 'colloquial parallel'];
-
-      return {
-        promptTone: targetRecommendation
-          ? targetRecommendation.recommendedRegister
-          : 'High Literary & Scholarly Register',
-        options: deterministicShuffle(rawOptions, seed),
-        correctWord: currentCard.term,
-        comparison: matrix.nuanceComparison,
-        recommendations: matrix.contextRecommendations,
-      };
-    }
-
-    // Fallback distinction trio if not explicitly pre-configured
-    const fallbackOptions = [currentCard.term, 'general synonym', 'colloquial parallel'];
-    return {
-      promptTone: 'High Literary & Scholarly Register',
-      options: deterministicShuffle(fallbackOptions, seed),
-      correctWord: currentCard.term,
-      comparison: `"${currentCard.term}" provides refined connotative precision suitable for literary and academic prose.`,
-      recommendations: [
-        {
-          word: currentCard.term,
-          recommendedRegister: 'Literary & Scholarly Register',
-          exampleSentence: `The scholar noted the ${currentCard.term} nature of the passage.`,
-        },
-      ],
-    };
-  }, [currentCard, currentIndex]);
+    return buildDistinctionQuiz(currentCard);
+  }, [currentCard]);
 
   // Handle distinction selection
   const handleSelectSynonym = (chosenWord: string) => {
     if (!distinctionData || selectedSynonym) return;
     setSelectedSynonym(chosenWord);
 
-    const isCorrect =
-      chosenWord.toLowerCase() === distinctionData.correctWord.toLowerCase();
+    const isCorrect = gradeDistinctionChoice(chosenWord, distinctionData.correctWord);
 
     const isSpanish = (currentCard?.language || 'en') === 'es';
     const explanation = isCorrect
@@ -1259,8 +1205,7 @@ export default function ReviewPage() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {distinctionData.options.map((option, idx) => {
                 const isSelected = selectedSynonym === option;
-                const isCorrectWord =
-                  option.toLowerCase() === distinctionData.correctWord.toLowerCase();
+                const isCorrectWord = gradeDistinctionChoice(option, distinctionData.correctWord);
 
                 let cardStyle =
                   'border-stone-200 bg-stone-50/60 hover:bg-stone-100 hover:border-stone-300 text-stone-900';
