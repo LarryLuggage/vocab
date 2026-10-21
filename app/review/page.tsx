@@ -43,8 +43,22 @@ import {
 import { normalizeDiacritics, formatGenderBadge } from '@/lib/language';
 import { cn, extractClozeToken } from '@/lib/utils';
 import { buildDistinctionQuiz, gradeDistinctionChoice } from '@/lib/distinction-quiz';
+import {
+  REVIEW_MODALITIES,
+  REVIEW_MODALITY_LABELS,
+  emptyAttemptStats,
+  isReviewModality,
+  modalityForCard,
+  overallAccuracy,
+  reconcileMixedPlan,
+  recordReviewAttempt,
+  type AttemptStats,
+  type MixedPlan,
+  type ReviewModality,
+  type ReviewSessionMode,
+} from '@/lib/review-mix';
 
-type ModalityMode = 'ACT-01' | 'ACT-02' | 'ACT-03' | 'ACT-04';
+type ModalityMode = ReviewModality;
 
 function CardFullDetails({
   card,
@@ -211,6 +225,15 @@ export default function ReviewPage() {
     return null;
   });
 
+  // Session statistics. Attempts are counted per question type so a cloze
+  // miss does not move the distinction score.
+  const [reviewedCount, setReviewedCount] = useState(0);
+  const [attemptStats, setAttemptStats] = useState<AttemptStats>(emptyAttemptStats);
+  const [sessionNonce, setSessionNonce] = useState(0);
+
+  // 'mixed' interleaves question types. A ?modality=ACT-0N link keeps one type.
+  const [sessionMode, setSessionMode] = useState<ReviewSessionMode>('mixed');
+
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -218,13 +241,8 @@ export default function ReviewPage() {
       const root = params.get('root') || undefined;
       const source = params.get('source') || undefined;
       const modalityParam = params.get('modality')?.toUpperCase();
-      if (
-        modalityParam === 'ACT-01' ||
-        modalityParam === 'ACT-02' ||
-        modalityParam === 'ACT-03' ||
-        modalityParam === 'ACT-04'
-      ) {
-        setActiveModality(modalityParam);
+      if (isReviewModality(modalityParam)) {
+        setSessionMode(modalityParam);
       }
       if (cardId || root || source) {
         setActiveFilter((prev) => {
@@ -255,13 +273,20 @@ export default function ReviewPage() {
     return rawQueue.filter((c) => (c.language || 'en') === selectedLanguage);
   }, [rawQueue, selectedLanguage]);
 
-  // Session Statistics
-  const [reviewedCount, setReviewedCount] = useState(0);
-  const [correctAttempts, setCorrectAttempts] = useState(0);
-  const [totalAttempts, setTotalAttempts] = useState(0);
-
-  // Active Modality Mode
-  const [activeModality, setActiveModality] = useState<ModalityMode>('ACT-01');
+  // One question type per card for this session. Removing cards (synthesis
+  // batch grading) keeps the remaining assignments; a new queue replans.
+  const mixedPlanRef = React.useRef<MixedPlan | null>(null);
+  const queueKey = queue.map((card) => card.id).join('\n');
+  const planNonce = `${sessionNonce}:${selectedLanguage}`;
+  const companionPoolSize = Math.max(queue.length, rawQueue.length);
+  const mixedPlan = useMemo(() => {
+    if (sessionMode !== 'mixed') return null;
+    return reconcileMixedPlan(mixedPlanRef.current, queue, Math.random, {
+      companionPoolSize,
+      nonce: planNonce,
+    });
+  }, [sessionMode, queue, queueKey, planNonce, companionPoolSize]);
+  mixedPlanRef.current = mixedPlan;
 
   // Modality 1: Cloze state
   const [clozeSentenceIndex, setClozeSentenceIndex] = useState(0);
@@ -333,6 +358,8 @@ export default function ReviewPage() {
         setRawQueue(res.data);
         setCurrentIndex(0);
         setSessionCompleted(res.data.length === 0);
+        setSessionNonce((nonce) => nonce + 1);
+        setAttemptStats(emptyAttemptStats());
       } catch (err) {
         setLoadError(errorMessageOf(err, 'Failed to load the review queue.'));
       } finally {
@@ -357,6 +384,9 @@ export default function ReviewPage() {
 
   // Current Card
   const currentCard: CardWithSrs | undefined = queue[currentIndex];
+  const activeModality: ModalityMode =
+    modalityForCard(mixedPlan, currentCard?.id, sessionMode) ??
+    (sessionMode === 'mixed' ? 'ACT-03' : sessionMode);
 
   // Synthesis Companion Selection (ACT-04)
   const synthesisCards = useMemo<CardWithSrs[]>(() => {
@@ -472,8 +502,7 @@ export default function ReviewPage() {
     setClozeChecked(true);
     setIsAnswerRevealed(true);
 
-    setTotalAttempts((prev) => prev + 1);
-    if (isMatch) setCorrectAttempts((prev) => prev + 1);
+    setAttemptStats((prev) => recordReviewAttempt(prev, 'ACT-01', isMatch));
   };
 
   // Distinction matrix question. Choices are shuffled once per card; the
@@ -504,8 +533,7 @@ export default function ReviewPage() {
       explanation,
     });
 
-    setTotalAttempts((prev) => prev + 1);
-    if (isCorrect) setCorrectAttempts((prev) => prev + 1);
+    setAttemptStats((prev) => recordReviewAttempt(prev, 'ACT-02', isCorrect));
     setIsAnswerRevealed(true);
   };
 
@@ -525,10 +553,9 @@ export default function ReviewPage() {
       setProductionResult(result);
       setIsAnswerRevealed(true);
       setShowSandboxHints(true);
-      setTotalAttempts((prev) => prev + 1);
-      if (result.evaluationStatus === 'pass') {
-        setCorrectAttempts((prev) => prev + 1);
-      }
+      setAttemptStats((prev) =>
+        recordReviewAttempt(prev, 'ACT-03', result.evaluationStatus === 'pass')
+      );
     } catch {
       setProductionResult({
         evaluationStatus: 'awkward',
@@ -557,10 +584,9 @@ export default function ReviewPage() {
       setSynthesisResult(result);
       setIsAnswerRevealed(true);
       setShowSynthesisDrawer(true);
-      setTotalAttempts((prev) => prev + 1);
-      if (result.evaluationStatus === 'pass') {
-        setCorrectAttempts((prev) => prev + 1);
-      }
+      setAttemptStats((prev) =>
+        recordReviewAttempt(prev, 'ACT-04', result.evaluationStatus === 'pass')
+      );
     } catch {
       const detected = synthesisCards
         .filter((c) => synthesisWordDetection[c.id])
@@ -672,7 +698,7 @@ export default function ReviewPage() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleRevealAnswer, currentIndex, queue, currentCard, isSavingRating]);
+  }, [handleRevealAnswer, handleRateCard, currentIndex, queue, currentCard, isSavingRating, activeModality]);
 
   // Progress percentage
   const progressPercent = queue.length > 0 ? Math.round((currentIndex / queue.length) * 100) : 100;
@@ -742,8 +768,7 @@ export default function ReviewPage() {
       );
     }
 
-    const accuracy =
-      totalAttempts > 0 ? Math.round((correctAttempts / totalAttempts) * 100) : 100;
+    const accuracy = overallAccuracy(attemptStats);
 
     return (
       <div className="max-w-2xl mx-auto py-12 px-4 text-center space-y-8 animate-in fade-in duration-300">
@@ -798,6 +823,26 @@ export default function ReviewPage() {
             </p>
           </div>
         </div>
+
+        {REVIEW_MODALITIES.some((modality) => attemptStats[modality].total > 0) && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-left">
+            {REVIEW_MODALITIES.filter((modality) => attemptStats[modality].total > 0).map(
+              (modality) => (
+                <div
+                  key={modality}
+                  className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2"
+                >
+                  <p className="text-[10px] font-sans uppercase tracking-wider text-stone-500">
+                    {REVIEW_MODALITY_LABELS[modality]}
+                  </p>
+                  <p className="font-serif text-lg text-[#1c1917]">
+                    {attemptStats[modality].correct}/{attemptStats[modality].total}
+                  </p>
+                </div>
+              )
+            )}
+          </div>
+        )}
 
         {/* Action Buttons */}
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
@@ -965,60 +1010,15 @@ export default function ReviewPage() {
         </div>
       </div>
 
-      {/* Modality Mode Selector Tabs */}
-      <div className="flex items-center justify-between border-b border-[#e7e5e4] pb-2 overflow-x-auto gap-3">
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setActiveModality('ACT-01')}
-            className={cn(
-              'px-3 py-1.5 rounded-full text-xs font-sans font-medium transition-all whitespace-nowrap',
-              activeModality === 'ACT-01'
-                ? 'bg-[#834832] text-white shadow-sm'
-                : 'text-[#57534e] hover:bg-stone-200/60'
-            )}
-          >
-            ACT-01: Contextual Cloze
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveModality('ACT-02')}
-            className={cn(
-              'px-3 py-1.5 rounded-full text-xs font-sans font-medium transition-all whitespace-nowrap',
-              activeModality === 'ACT-02'
-                ? 'bg-[#834832] text-white shadow-sm'
-                : 'text-[#57534e] hover:bg-stone-200/60'
-            )}
-          >
-            ACT-02: Distinction Matrix
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveModality('ACT-03')}
-            className={cn(
-              'px-3 py-1.5 rounded-full text-xs font-sans font-medium transition-all whitespace-nowrap',
-              activeModality === 'ACT-03'
-                ? 'bg-[#834832] text-white shadow-sm'
-                : 'text-[#57534e] hover:bg-stone-200/60'
-            )}
-          >
-            ACT-03: Production Sandbox
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveModality('ACT-04')}
-            className={cn(
-              'px-3 py-1.5 rounded-full text-xs font-sans font-medium transition-all whitespace-nowrap',
-              activeModality === 'ACT-04'
-                ? 'bg-[#834832] text-white shadow-sm'
-                : 'text-[#57534e] hover:bg-stone-200/60'
-            )}
-          >
-            ACT-04: Synthesis Weave
-          </button>
+      {/* Current question in the mixed session. Type is assigned, not picked. */}
+      <div className="flex items-center justify-between border-b border-[#e7e5e4] pb-2 gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="px-2.5 py-1 rounded-full bg-[#f2e8e5] text-[#834832] text-[11px] font-sans font-semibold uppercase tracking-wider shrink-0">
+            {sessionMode === 'mixed' ? 'Mixed session' : 'Single type'}
+          </span>
+          <span className="text-sm font-serif text-[#1c1917] truncate">
+            {REVIEW_MODALITY_LABELS[activeModality]}
+          </span>
         </div>
 
         {/* FSRS Stats Chip */}
