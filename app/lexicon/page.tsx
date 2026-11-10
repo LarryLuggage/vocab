@@ -26,10 +26,12 @@ import {
   Eye,
   BarChart3,
   RefreshCw,
+  Feather,
 } from 'lucide-react';
 import { CardWithSrs, FSRSState } from '@/types/lexis';
 import { MorphemeGraph } from '@/components/MorphemeGraph';
 import { RetentionAnalytics } from '@/components/RetentionAnalytics';
+import { WritingPortfolio } from '@/components/WritingPortfolio';
 import { CardInspectorDrawer } from '@/components/CardInspectorDrawer';
 import { CustomPackModal } from '@/components/CustomPackModal';
 import { apiFetch, errorMessageOf, CARDS_UPDATED_EVENT, notifyCardsUpdated } from '@/lib/api-client';
@@ -57,7 +59,9 @@ export default function LexiconPage() {
   const [selectedLanguage, setSelectedLanguage] = useState<'all' | 'en' | 'es'>('all');
   const [selectedTier, setSelectedTier] = useState<number | 'all'>('all');
   const [selectedOrigin, setSelectedOrigin] = useState<string | 'all'>('all');
-  const [viewMode, setViewMode] = useState<'catalog' | 'roots' | 'sources' | 'network' | 'analytics'>('catalog');
+  const [viewMode, setViewMode] = useState<
+    'catalog' | 'roots' | 'sources' | 'network' | 'analytics' | 'portfolio'
+  >('catalog');
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [exportNotification, setExportNotification] = useState<string | null>(null);
   const [isSeedingPack, setIsSeedingPack] = useState<'es-literary' | 'en-philosophical' | null>(null);
@@ -79,7 +83,8 @@ export default function LexiconPage() {
         viewParam === 'roots' ||
         viewParam === 'sources' ||
         viewParam === 'catalog' ||
-        viewParam === 'analytics'
+        viewParam === 'analytics' ||
+        viewParam === 'portfolio'
       ) {
         setViewMode(viewParam);
       }
@@ -705,6 +710,19 @@ export default function LexiconPage() {
               <BarChart3 className="w-3.5 h-3.5" />
               <span>Analytics</span>
             </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('portfolio')}
+              className={cn(
+                'px-3 py-1.5 rounded-lg text-xs font-sans font-medium transition-all flex items-center gap-1.5',
+                viewMode === 'portfolio'
+                  ? 'bg-white shadow-xs text-stone-900 font-semibold'
+                  : 'text-stone-600 hover:text-stone-900'
+              )}
+            >
+              <Feather className="w-3.5 h-3.5" />
+              <span>Writing Studio</span>
+            </button>
           </div>
         </div>
 
@@ -795,6 +813,12 @@ export default function LexiconPage() {
       {/* Main Content View */}
       {isLoading ? (
         <p className="text-sm font-sans text-[#a8a29e] py-12 text-center">Loading your lexicon…</p>
+      ) : viewMode === 'portfolio' ? (
+        /* --- VIEW 6: WRITING REVISION COACH (ACT-05) & PRODUCTION PORTFOLIO --- */
+        <WritingPortfolio
+          cards={cards}
+          onInspectCard={(id) => setSelectedCardId(id)}
+        />
       ) : filteredCards.length === 0 ? (
         /* Empty State */
         <div className="text-center py-16 px-4 bg-white border border-[#e7e5e4] rounded-2xl shadow-sm space-y-4">
@@ -1204,6 +1228,8 @@ export default function LexiconPage() {
       {/* Slide-Over Card Inspector Drawer */}
       <CardInspectorDrawer
         card={cards.find((c) => c.id === selectedCardId) || null}
+        allCards={cards}
+        onSelectCard={(id) => setSelectedCardId(id)}
         onClose={() => setSelectedCardId(null)}
         onCardUpdated={(updated) => {
           setCards((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));

@@ -11,6 +11,8 @@ import {
   RefreshCw,
   Trophy,
   ArrowRight,
+  ArrowLeftRight,
+  SkipForward,
   BookOpen,
   Volume2,
   GitBranch,
@@ -41,6 +43,19 @@ import {
   validateSynthesisPassage,
 } from '@/lib/production-validator';
 import { normalizeDiacritics, formatGenderBadge } from '@/lib/language';
+import {
+  ReviewLanguageTrack,
+  MixedOrderMode,
+  REVIEW_LANGUAGE_STORAGE_KEY,
+  REVIEW_SPANISH_AUTO_GLOSS_STORAGE_KEY,
+  REVIEW_MIXED_ORDER_STORAGE_KEY,
+  computeLanguageQueueCounts,
+  filterAndOrderReviewQueue,
+  pruneRatedCardsFromQueue,
+  deferCardToEndOfQueue,
+  toggleEnglishSpanishTrack,
+  parseReviewLanguageParam,
+} from '@/lib/review-queue';
 import { cn, extractClozeToken } from '@/lib/utils';
 
 type ModalityMode = 'ACT-01' | 'ACT-02' | 'ACT-03' | 'ACT-04';
@@ -201,7 +216,10 @@ function CardFullDetails({
 
 export default function ReviewPage() {
   const [rawQueue, setRawQueue] = useState<CardWithSrs[]>([]);
-  const [selectedLanguage, setSelectedLanguage] = useState<'all' | 'en' | 'es'>('all');
+  const [selectedLanguage, setSelectedLanguage] = useState<ReviewLanguageTrack>('all');
+  const [mixedOrder, setMixedOrder] = useState<MixedOrderMode>('en-first');
+  const [autoShowSpanishGloss, setAutoShowSpanishGloss] = useState(false);
+  const [showSpanishGlossHint, setShowSpanishGlossHint] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [drillAll, setDrillAll] = useState(false);
   const [sessionCompleted, setSessionCompleted] = useState(false);
@@ -233,6 +251,47 @@ export default function ReviewPage() {
       const root = params.get('root') || undefined;
       const source = params.get('source') || undefined;
       const modalityParam = params.get('modality')?.toUpperCase();
+      const urlLanguageTrack = parseReviewLanguageParam(params.get('language'));
+
+      if (urlLanguageTrack) {
+        setSelectedLanguage(urlLanguageTrack);
+        try {
+          window.localStorage.setItem(REVIEW_LANGUAGE_STORAGE_KEY, urlLanguageTrack);
+        } catch {
+          // Ignore storage quota / privacy errors
+        }
+      } else {
+        try {
+          const savedTrack = parseReviewLanguageParam(
+            window.localStorage.getItem(REVIEW_LANGUAGE_STORAGE_KEY)
+          );
+          if (savedTrack) {
+            setSelectedLanguage(savedTrack);
+          }
+        } catch {
+          // Ignore storage access errors
+        }
+      }
+
+      try {
+        const savedAutoGloss = window.localStorage.getItem(
+          REVIEW_SPANISH_AUTO_GLOSS_STORAGE_KEY
+        );
+        if (savedAutoGloss === 'true') {
+          setAutoShowSpanishGloss(true);
+        }
+        const savedMixedOrder = window.localStorage.getItem(REVIEW_MIXED_ORDER_STORAGE_KEY);
+        if (
+          savedMixedOrder === 'due' ||
+          savedMixedOrder === 'en-first' ||
+          savedMixedOrder === 'es-first'
+        ) {
+          setMixedOrder(savedMixedOrder);
+        }
+      } catch {
+        // Ignore storage access errors
+      }
+
       if (
         modalityParam === 'ACT-01' ||
         modalityParam === 'ACT-02' ||
@@ -256,19 +315,78 @@ export default function ReviewPage() {
     }
   }, []);
 
-  // Queue Counts for Language Filter Pills
-  const languageCounts = useMemo(() => {
-    const totalDue = rawQueue.length;
-    const enDue = rawQueue.filter((c) => (c.language || 'en') === 'en').length;
-    const esDue = rawQueue.filter((c) => c.language === 'es').length;
-    return { totalDue, enDue, esDue };
-  }, [rawQueue]);
+  // Queue Counts for Language Track Switcher
+  const languageCounts = useMemo(
+    () => computeLanguageQueueCounts(rawQueue),
+    [rawQueue]
+  );
 
-  // Filtered queue based on selected language
-  const queue = useMemo(() => {
-    if (selectedLanguage === 'all') return rawQueue;
-    return rawQueue.filter((c) => (c.language || 'en') === selectedLanguage);
-  }, [rawQueue, selectedLanguage]);
+  // Filtered and ordered queue based on selected language track and mixed ordering preference
+  const queue = useMemo(
+    () => filterAndOrderReviewQueue(rawQueue, selectedLanguage, mixedOrder),
+    [rawQueue, selectedLanguage, mixedOrder]
+  );
+
+  // Switch active language track, persist preference, sync URL, and resume if target track has cards
+  const handleSelectLanguageTrack = useCallback(
+    (track: ReviewLanguageTrack) => {
+      setSelectedLanguage(track);
+      setCurrentIndex(0);
+      const nextTrackCards = filterAndOrderReviewQueue(rawQueue, track, mixedOrder);
+      if (nextTrackCards.length > 0) {
+        setSessionCompleted(false);
+      }
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(REVIEW_LANGUAGE_STORAGE_KEY, track);
+        } catch {
+          // Ignore storage errors
+        }
+        const url = new URL(window.location.href);
+        if (track === 'all') {
+          url.searchParams.delete('language');
+        } else {
+          url.searchParams.set('language', track);
+        }
+        window.history.replaceState({}, '', `${url.pathname}${url.search}`);
+      }
+    },
+    [rawQueue, mixedOrder]
+  );
+
+  // Toggle Mixed Mode ordering ('en-first' vs 'due')
+  const handleToggleMixedOrder = useCallback(() => {
+    setMixedOrder((prev) => {
+      const nextOrder: MixedOrderMode = prev === 'en-first' ? 'due' : 'en-first';
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(REVIEW_MIXED_ORDER_STORAGE_KEY, nextOrder);
+        } catch {
+          // Ignore storage errors
+        }
+      }
+      return nextOrder;
+    });
+    setCurrentIndex(0);
+  }, []);
+
+  // Toggle Auto-Show English Gloss on Spanish cards
+  const handleToggleAutoSpanishGloss = useCallback(() => {
+    setAutoShowSpanishGloss((prev) => {
+      const nextVal = !prev;
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(
+            REVIEW_SPANISH_AUTO_GLOSS_STORAGE_KEY,
+            String(nextVal)
+          );
+        } catch {
+          // Ignore storage errors
+        }
+      }
+      return nextVal;
+    });
+  }, []);
 
   // Session Statistics
   const [reviewedCount, setReviewedCount] = useState(0);
@@ -373,6 +491,13 @@ export default function ReviewPage() {
   // Current Card
   const currentCard: CardWithSrs | undefined = queue[currentIndex];
 
+  // Defer / Skip the current card to the end of the queue without rating it
+  const handleDeferCurrentCard = useCallback(() => {
+    if (!currentCard || queue.length <= 1) return;
+    setRawQueue((prev) => deferCardToEndOfQueue(prev, currentCard.id));
+    setCurrentIndex((prev) => (prev >= queue.length - 1 ? 0 : prev));
+  }, [currentCard, queue.length]);
+
   // Synthesis Companion Selection (ACT-04)
   const synthesisCards = useMemo<CardWithSrs[]>(() => {
     if (!currentCard) return [];
@@ -448,6 +573,7 @@ export default function ReviewPage() {
     setShowSynthesisDrawer(false);
     setIsAnswerRevealed(false);
     setShowSandboxHints(false);
+    setShowSpanishGlossHint(false);
   }, [currentIndex, currentCard?.id, currentCard?.srs.reps, currentCard?.cloze_sentences?.length]);
 
   // Handle explicit answer revelation
@@ -671,43 +797,50 @@ export default function ReviewPage() {
     notifyCardsUpdated();
     setReviewedCount((prev) => prev + targetIds.length);
 
-    if (isBatchSynthesis) {
-      const companionIdSet = new Set(synthesisCards.slice(1).map((c) => c.id));
-      const laterCompanionIds = new Set(
-        queue
-          .slice(currentIndex + 1)
-          .filter((c) => companionIdSet.has(c.id))
-          .map((c) => c.id)
-      );
+    // Stateful Queue Pruning: remove all rated cards from rawQueue so switching
+    // between English and Spanish mid-session never replays already-graded cards.
+    const nextRawQueue = pruneRatedCardsFromQueue(rawQueue, targetIds);
+    setRawQueue(nextRawQueue);
 
-      if (laterCompanionIds.size > 0) {
-        const nextQueueLength = queue.length - laterCompanionIds.size;
-        setRawQueue((prev) => prev.filter((c) => !laterCompanionIds.has(c.id)));
-        if (currentIndex + 1 < nextQueueLength) {
-          setCurrentIndex((prev) => prev + 1);
-        } else {
-          setSessionCompleted(true);
-        }
-        return;
-      }
-    }
+    const remainingQueue = filterAndOrderReviewQueue(
+      nextRawQueue,
+      selectedLanguage,
+      mixedOrder
+    );
 
-    // Move to next card or complete session
-    if (currentIndex + 1 < queue.length) {
-      setCurrentIndex((prev) => prev + 1);
-    } else {
+    if (remainingQueue.length === 0) {
+      setCurrentIndex(0);
       setSessionCompleted(true);
+    } else {
+      setCurrentIndex((prev) => Math.min(prev, remainingQueue.length - 1));
     }
   };
 
-  // Keyboard navigation for Spacebar (reveal answer) and FSRS rating (keys 1, 2, 3, 4)
+  // Keyboard navigation for Spacebar (reveal), L (toggle EN/ES), H (Spanish Gloss Hint), and FSRS rating (1-4)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept if user is typing in input or textarea
+      // Don't intercept if user is typing in input or textarea or using modifier keys
       if (
         document.activeElement?.tagName === 'INPUT' ||
-        document.activeElement?.tagName === 'TEXTAREA'
+        document.activeElement?.tagName === 'TEXTAREA' ||
+        e.metaKey ||
+        e.ctrlKey ||
+        e.altKey
       ) {
+        return;
+      }
+
+      // L key: instant toggle between English and Spanish review tracks
+      if (e.key === 'l' || e.key === 'L') {
+        e.preventDefault();
+        handleSelectLanguageTrack(toggleEnglishSpanishTrack(selectedLanguage));
+        return;
+      }
+
+      // H key: toggle English Gloss Hint on Spanish cards
+      if ((e.key === 'h' || e.key === 'H') && (currentCard?.language || 'en') === 'es') {
+        e.preventDefault();
+        setShowSpanishGlossHint((prev) => !prev);
         return;
       }
 
@@ -726,10 +859,140 @@ export default function ReviewPage() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleRevealAnswer, currentIndex, queue, currentCard, isSavingRating]);
+  }, [
+    handleRevealAnswer,
+    handleSelectLanguageTrack,
+    selectedLanguage,
+    currentIndex,
+    queue,
+    currentCard,
+    isSavingRating,
+  ]);
 
   // Progress percentage
-  const progressPercent = queue.length > 0 ? Math.round((currentIndex / queue.length) * 100) : 100;
+  const totalInCurrentTrackSession = reviewedCount + queue.length;
+  const progressPercent =
+    totalInCurrentTrackSession > 0
+      ? Math.round((reviewedCount / totalInCurrentTrackSession) * 100)
+      : 100;
+
+  // Reusable Prominent Language Track Switcher Bar
+  const renderLanguageTrackBar = () => (
+    <div
+      data-testid="language-track-switcher"
+      className="bg-white border border-[#e7e5e4] rounded-2xl p-3 sm:p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3"
+    >
+      <div className="flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          data-testid="track-btn-en"
+          onClick={() => handleSelectLanguageTrack('en')}
+          className={cn(
+            'px-3.5 py-2 rounded-xl text-xs font-sans transition-all flex items-center gap-2 cursor-pointer border',
+            selectedLanguage === 'en'
+              ? 'bg-[#834832] text-white border-[#834832] font-semibold shadow-xs'
+              : 'bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100 hover:border-stone-300 font-medium'
+          )}
+        >
+          <span>🇬🇧 English Only</span>
+          <span
+            className={cn(
+              'px-2 py-0.5 rounded-full text-[11px] font-mono font-bold',
+              selectedLanguage === 'en'
+                ? 'bg-white/20 text-white'
+                : 'bg-stone-200/80 text-stone-700'
+            )}
+          >
+            {languageCounts.enDue}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          data-testid="track-btn-es"
+          onClick={() => handleSelectLanguageTrack('es')}
+          className={cn(
+            'px-3.5 py-2 rounded-xl text-xs font-sans transition-all flex items-center gap-2 cursor-pointer border',
+            selectedLanguage === 'es'
+              ? 'bg-[#834832] text-white border-[#834832] font-semibold shadow-xs'
+              : 'bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100 hover:border-stone-300 font-medium'
+          )}
+        >
+          <span>🇪🇸 Español Only</span>
+          <span
+            className={cn(
+              'px-2 py-0.5 rounded-full text-[11px] font-mono font-bold',
+              selectedLanguage === 'es'
+                ? 'bg-white/20 text-white'
+                : 'bg-stone-200/80 text-stone-700'
+            )}
+          >
+            {languageCounts.esDue}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          data-testid="track-btn-all"
+          onClick={() => handleSelectLanguageTrack('all')}
+          className={cn(
+            'px-3.5 py-2 rounded-xl text-xs font-sans transition-all flex items-center gap-2 cursor-pointer border',
+            selectedLanguage === 'all'
+              ? 'bg-[#834832] text-white border-[#834832] font-semibold shadow-xs'
+              : 'bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100 hover:border-stone-300 font-medium'
+          )}
+        >
+          <span>🌐 All Languages</span>
+          <span
+            className={cn(
+              'px-2 py-0.5 rounded-full text-[11px] font-mono font-bold',
+              selectedLanguage === 'all'
+                ? 'bg-white/20 text-white'
+                : 'bg-stone-200/80 text-stone-700'
+            )}
+          >
+            {languageCounts.totalDue}
+          </span>
+        </button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        {selectedLanguage === 'all' &&
+          languageCounts.enDue > 0 &&
+          languageCounts.esDue > 0 && (
+            <button
+              type="button"
+              data-testid="toggle-mixed-order"
+              onClick={handleToggleMixedOrder}
+              title="Choose whether English cards appear before Spanish cards in Mixed mode"
+              className="px-3 py-1.5 rounded-xl bg-[#fdf8f6] hover:bg-[#f2e8e5] border border-[#eaddd7] text-[#834832] text-xs font-sans font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
+            >
+              <span>
+                {mixedOrder === 'en-first'
+                  ? 'Order: 🇬🇧 English First'
+                  : 'Order: Due Time'}
+              </span>
+            </button>
+          )}
+
+        <button
+          type="button"
+          data-testid="quick-toggle-en-es"
+          onClick={() =>
+            handleSelectLanguageTrack(toggleEnglishSpanishTrack(selectedLanguage))
+          }
+          title="Quickly flip between English and Spanish queues (Keyboard shortcut: L)"
+          className="px-3 py-1.5 rounded-xl bg-stone-100 hover:bg-stone-200/80 border border-stone-200 text-stone-700 text-xs font-sans font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
+        >
+          <ArrowLeftRight className="w-3.5 h-3.5 text-[#834832]" />
+          <span>Toggle EN ⇄ ES</span>
+          <kbd className="px-1.5 py-0.5 rounded bg-white border border-stone-300 font-mono text-[10px] text-stone-600">
+            L
+          </kbd>
+        </button>
+      </div>
+    </div>
+  );
 
   if (isLoadingQueue) {
     return (
@@ -761,36 +1024,55 @@ export default function ReviewPage() {
   if (sessionCompleted || !currentCard) {
     if (rawQueue.length > 0 && queue.length === 0) {
       return (
-        <div className="max-w-2xl mx-auto py-12 px-4 text-center space-y-6 animate-in fade-in duration-300">
-          <div className="inline-flex p-4 rounded-full bg-[#834832]/10 text-[#834832] ring-8 ring-[#834832]/5">
-            <BookOpen className="w-10 h-10" />
-          </div>
-          <div className="space-y-2">
-            <h1 className="text-3xl font-serif font-bold text-[#1c1917]">
-              No {selectedLanguage === 'es' ? 'Spanish' : 'English'} Cards Due
-            </h1>
-            <p className="text-sm font-sans text-[#78716c] max-w-md mx-auto">
-              There are no {selectedLanguage === 'es' ? 'Spanish' : 'English'} cards currently due in your review queue. You have {rawQueue.length} total card{rawQueue.length === 1 ? '' : 's'} available to practice across all languages.
-            </p>
-          </div>
-          <div className="flex items-center justify-center gap-3 pt-2">
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedLanguage('all');
-                setCurrentIndex(0);
-                setSessionCompleted(false);
-              }}
-              className="px-6 py-3 rounded-full bg-[#834832] text-white text-sm font-sans font-semibold hover:bg-[#693522] transition-colors shadow-sm"
-            >
-              Practice All Languages ({rawQueue.length} cards)
-            </button>
-            <Link
-              href="/lexicon"
-              className="px-6 py-3 rounded-full border border-stone-300 text-stone-700 hover:bg-stone-100 text-sm font-sans font-semibold transition-colors"
-            >
-              Return to Lexicon
-            </Link>
+        <div className="max-w-3xl mx-auto py-8 px-4 space-y-6 animate-in fade-in duration-300">
+          {renderLanguageTrackBar()}
+
+          <div className="bg-white border border-[#e7e5e4] rounded-2xl p-8 text-center space-y-6 shadow-sm">
+            <div className="inline-flex p-4 rounded-full bg-[#834832]/10 text-[#834832] ring-8 ring-[#834832]/5">
+              <BookOpen className="w-10 h-10" />
+            </div>
+            <div className="space-y-2">
+              <h1 className="text-3xl font-serif font-bold text-[#1c1917]">
+                No {selectedLanguage === 'es' ? 'Spanish' : 'English'} Cards Due
+              </h1>
+              <p className="text-sm font-sans text-[#78716c] max-w-md mx-auto">
+                There are no {selectedLanguage === 'es' ? 'Spanish' : 'English'} cards currently due in your review queue. You have{' '}
+                {rawQueue.length} card{rawQueue.length === 1 ? '' : 's'} remaining in your other language track.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+              {selectedLanguage === 'es' && languageCounts.enDue > 0 && (
+                <button
+                  type="button"
+                  onClick={() => handleSelectLanguageTrack('en')}
+                  className="px-6 py-3 rounded-full bg-[#834832] text-white text-sm font-sans font-semibold hover:bg-[#693522] transition-colors shadow-sm cursor-pointer"
+                >
+                  Switch to 🇬🇧 English Queue ({languageCounts.enDue} due)
+                </button>
+              )}
+              {selectedLanguage === 'en' && languageCounts.esDue > 0 && (
+                <button
+                  type="button"
+                  onClick={() => handleSelectLanguageTrack('es')}
+                  className="px-6 py-3 rounded-full bg-[#834832] text-white text-sm font-sans font-semibold hover:bg-[#693522] transition-colors shadow-sm cursor-pointer"
+                >
+                  Switch to 🇪🇸 Español Queue ({languageCounts.esDue} due)
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => handleSelectLanguageTrack('all')}
+                className="px-6 py-3 rounded-full border border-[#834832] text-[#834832] hover:bg-[#fdf8f6] text-sm font-sans font-semibold transition-colors cursor-pointer"
+              >
+                Practice All Languages ({rawQueue.length} cards)
+              </button>
+              <Link
+                href="/lexicon"
+                className="px-6 py-3 rounded-full border border-stone-300 text-stone-700 hover:bg-stone-100 text-sm font-sans font-semibold transition-colors"
+              >
+                Return to Lexicon
+              </Link>
+            </div>
           </div>
         </div>
       );
@@ -801,18 +1083,65 @@ export default function ReviewPage() {
 
     return (
       <div className="max-w-2xl mx-auto py-12 px-4 text-center space-y-8 animate-in fade-in duration-300">
+        {rawQueue.length > 0 && renderLanguageTrackBar()}
+
         <div className="inline-flex p-4 rounded-full bg-[#834832]/10 text-[#834832] ring-8 ring-[#834832]/5">
           <Trophy className="w-12 h-12" />
         </div>
 
         <div className="space-y-2">
           <h1 className="text-3xl sm:text-4xl font-serif font-bold text-[#1c1917]">
-            Review Session Concluded
+            {selectedLanguage === 'en'
+              ? '🇬🇧 English Track Concluded'
+              : selectedLanguage === 'es'
+              ? '🇪🇸 Español Track Concluded'
+              : 'Review Session Concluded'}
           </h1>
           <p className="text-sm font-sans text-[#78716c] max-w-md mx-auto">
             Your retention stability curves have been updated using the Free Spaced Repetition Scheduler (FSRS).
           </p>
         </div>
+
+        {/* Cross-Track Completion Bridge when another language still has due cards */}
+        {rawQueue.length > 0 && (
+          <div
+            data-testid="cross-track-bridge"
+            className="p-5 bg-[#fdf8f6] border border-[#eaddd7] rounded-2xl shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4 text-left"
+          >
+            <div className="space-y-1">
+              <div className="text-xs font-sans font-bold uppercase tracking-wider text-[#834832]">
+                Remaining Queue in Other Language
+              </div>
+              <p className="text-sm font-serif text-[#4f2416]">
+                {languageCounts.esDue > 0
+                  ? `You finished your 🇬🇧 English queue! You still have ${languageCounts.esDue} 🇪🇸 Español ${
+                      languageCounts.esDue === 1 ? 'card' : 'cards'
+                    } ready when you want to practice Spanish.`
+                  : `You finished your 🇪🇸 Español queue! You still have ${languageCounts.enDue} 🇬🇧 English ${
+                      languageCounts.enDue === 1 ? 'card' : 'cards'
+                    } due.`}
+              </p>
+            </div>
+            {languageCounts.esDue > 0 && (
+              <button
+                type="button"
+                onClick={() => handleSelectLanguageTrack('es')}
+                className="w-full sm:w-auto shrink-0 px-5 py-2.5 rounded-xl bg-[#834832] hover:bg-[#693522] text-white text-xs font-sans font-semibold transition-colors cursor-pointer"
+              >
+                Continue with 🇪🇸 Español ({languageCounts.esDue} due)
+              </button>
+            )}
+            {languageCounts.enDue > 0 && (
+              <button
+                type="button"
+                onClick={() => handleSelectLanguageTrack('en')}
+                className="w-full sm:w-auto shrink-0 px-5 py-2.5 rounded-xl bg-[#834832] hover:bg-[#693522] text-white text-xs font-sans font-semibold transition-colors cursor-pointer"
+              >
+                Continue with 🇬🇧 English ({languageCounts.enDue} due)
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Session Stats Grid */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 p-6 bg-white border border-[#e7e5e4] rounded-2xl shadow-sm text-left">
@@ -861,7 +1190,7 @@ export default function ReviewPage() {
               refreshQueue(true);
               setSessionCompleted(false);
             }}
-            className="w-full sm:w-auto px-6 py-3 rounded-full bg-[#834832] text-white text-sm font-sans font-semibold hover:bg-[#693522] transition-colors shadow-sm flex items-center justify-center gap-2"
+            className="w-full sm:w-auto px-6 py-3 rounded-full bg-[#834832] text-white text-sm font-sans font-semibold hover:bg-[#693522] transition-colors shadow-sm flex items-center justify-center gap-2 cursor-pointer"
           >
             <RotateCcw className="w-4 h-4" />
             <span>Practice All Cards Again</span>
@@ -887,6 +1216,10 @@ export default function ReviewPage() {
     );
   }
 
+  const isCurrentSpanish = (currentCard.language || 'en') === 'es';
+  const isSpanishGlossVisible =
+    isCurrentSpanish && (showSpanishGlossHint || autoShowSpanishGloss);
+
   // Cloze sentence for ACT-01
   const activeClozeSentence =
     currentCard.cloze_sentences?.[
@@ -898,7 +1231,7 @@ export default function ReviewPage() {
   const clozeDisplay = clozeRaw.replace(/{{([^}]+)}}/g, '_______');
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6 animate-in fade-in duration-300">
+    <div className="max-w-3xl mx-auto space-y-5 animate-in fade-in duration-300">
       {/* Targeted Drill Banner */}
       {activeFilter && (
         <div className="bg-[#fdf8f6] border border-[#eaddd7] rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
@@ -926,87 +1259,54 @@ export default function ReviewPage() {
         </div>
       )}
 
+      {/* Prominent Language Track Switcher Bar */}
+      {renderLanguageTrackBar()}
+
       {/* Top Header: Queue Manager & Progress */}
-      <div className="space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-sans">
+      <div className="space-y-2.5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs font-sans">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold uppercase tracking-wider text-[#834832]">
-              FSRS Review Queue
+              {selectedLanguage === 'en'
+                ? '🇬🇧 English Queue'
+                : selectedLanguage === 'es'
+                ? '🇪🇸 Español Queue'
+                : '🌐 Mixed FSRS Queue'}
             </span>
             <span className="px-2 py-0.5 rounded-full bg-[#f2e8e5] text-[#834832] font-semibold text-[11px]">
-              Card {queue.length > 0 ? currentIndex + 1 : 0} of {queue.length}
+              Card {queue.length > 0 ? currentIndex + 1 : 0} of {queue.length} remaining
             </span>
             <span className="px-2 py-0.5 rounded-full bg-stone-100 text-stone-600 font-mono text-[11px]">
               {getCardStateLabel(currentCard.srs.state)}
             </span>
             <span className="px-2 py-0.5 rounded-full bg-stone-100 text-stone-700 font-bold text-[10px] uppercase border border-stone-200">
-              {(currentCard.language || 'en') === 'es' ? '🇪🇸 ES' : '🇬🇧 EN'}
+              {isCurrentSpanish ? '🇪🇸 ES' : '🇬🇧 EN'}
             </span>
-            {(currentCard.language || 'en') === 'es' && currentCard.gender && (
+            {isCurrentSpanish && currentCard.gender && (
               <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-900 font-bold text-[10px] border border-amber-300">
                 {formatGenderBadge(currentCard.gender, currentCard.part_of_speech)?.article || currentCard.gender}
               </span>
             )}
           </div>
 
-          {/* Queue Language Filter Pill */}
-          <div className="inline-flex items-center rounded-lg border border-stone-200 p-0.5 bg-stone-100/70 text-xs font-sans self-start sm:self-auto">
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedLanguage('all');
-                setCurrentIndex(0);
-              }}
-              className={cn(
-                'px-2.5 py-1 rounded-md transition-all font-medium flex items-center gap-1',
-                selectedLanguage === 'all'
-                  ? 'bg-white text-[#834832] shadow-xs font-semibold'
-                  : 'text-stone-600 hover:text-stone-900'
-              )}
-            >
-              <span>All</span>
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-stone-200/80 text-stone-700">
-                {languageCounts.totalDue}
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            {reviewedCount > 0 && (
+              <span className="text-[11px] font-mono text-stone-500">
+                {reviewedCount} graded this session
               </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedLanguage('en');
-                setCurrentIndex(0);
-              }}
-              className={cn(
-                'px-2.5 py-1 rounded-md transition-all font-medium flex items-center gap-1',
-                selectedLanguage === 'en'
-                  ? 'bg-white text-[#834832] shadow-xs font-semibold'
-                  : 'text-stone-600 hover:text-stone-900'
-              )}
-            >
-              <span>🇬🇧 English</span>
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-stone-200/80 text-stone-700">
-                {languageCounts.enDue}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedLanguage('es');
-                setCurrentIndex(0);
-              }}
-              className={cn(
-                'px-2.5 py-1 rounded-md transition-all font-medium flex items-center gap-1',
-                selectedLanguage === 'es'
-                  ? 'bg-white text-[#834832] shadow-xs font-semibold'
-                  : 'text-stone-600 hover:text-stone-900'
-              )}
-            >
-              <span>🇪🇸 Español</span>
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-stone-200/80 text-stone-700">
-                {languageCounts.esDue}
-              </span>
-            </button>
+            )}
+            {queue.length > 1 && (
+              <button
+                type="button"
+                data-testid="defer-card-btn"
+                onClick={handleDeferCurrentCard}
+                title="Push this card to the end of the session queue"
+                className="px-2.5 py-1 rounded-lg bg-stone-100 hover:bg-stone-200/80 border border-stone-200 text-stone-700 text-[11px] font-sans font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+              >
+                <SkipForward className="w-3 h-3 text-[#834832]" />
+                <span>Defer Card ⏭</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -1073,6 +1373,13 @@ export default function ReviewPage() {
           >
             ACT-04: Synthesis Weave
           </button>
+
+          <Link
+            href="/lexicon?view=portfolio"
+            className="px-3 py-1.5 rounded-full text-xs font-sans font-semibold transition-all whitespace-nowrap text-[#834832] bg-[#fdf8f6] border border-[#eaddd7] hover:bg-[#f2e8e5]"
+          >
+            ACT-05: Prose Polisher ↗
+          </Link>
         </div>
 
         {/* FSRS Stats Chip */}
@@ -1085,6 +1392,101 @@ export default function ReviewPage() {
 
       {/* Main Drill Card Surface */}
       <div className="bg-white border border-[#e7e5e4] rounded-2xl p-6 sm:p-8 shadow-sm space-y-6">
+        {/* Spanish Pacing & Scaffolding Toolbar (Addressing Spanish Exercise Difficulty) */}
+        {isCurrentSpanish && (
+          <div
+            data-testid="spanish-pacing-toolbar"
+            className="p-3.5 rounded-xl bg-[#f0f9ff]/80 border border-[#bae6fd] space-y-2.5"
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2 text-xs font-sans font-semibold text-[#0369a1]">
+                <span>🇪🇸 Español Pacing &amp; Assist</span>
+                {currentCard.gender && (
+                  <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-900 border border-amber-300 text-[10px] font-bold">
+                    {formatGenderBadge(currentCard.gender, currentCard.part_of_speech)?.fullBadge ||
+                      currentCard.gender}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  data-testid="spanish-gloss-hint-btn"
+                  onClick={() => setShowSpanishGlossHint((prev) => !prev)}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-[11px] font-sans font-semibold transition-colors flex items-center gap-1.5 border cursor-pointer',
+                    isSpanishGlossVisible
+                      ? 'bg-[#0369a1] text-white border-[#0369a1]'
+                      : 'bg-white text-[#0369a1] border-[#bae6fd] hover:bg-[#e0f2fe]'
+                  )}
+                >
+                  <BookOpen className="w-3 h-3" />
+                  <span>
+                    {isSpanishGlossVisible ? 'Hide English Gloss' : 'English Gloss Hint'}
+                  </span>
+                  <kbd
+                    className={cn(
+                      'px-1 py-0.2 rounded font-mono text-[10px]',
+                      isSpanishGlossVisible
+                        ? 'bg-white/20 text-white'
+                        : 'bg-[#f0f9ff] text-[#0369a1] border border-[#bae6fd]'
+                    )}
+                  >
+                    H
+                  </kbd>
+                </button>
+
+                <button
+                  type="button"
+                  data-testid="spanish-auto-gloss-btn"
+                  onClick={handleToggleAutoSpanishGloss}
+                  title="Automatically show the English gloss anchor on all Spanish exercises"
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-[11px] font-sans font-medium transition-colors flex items-center gap-1.5 border cursor-pointer',
+                    autoShowSpanishGloss
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-300 font-semibold'
+                      : 'bg-white text-stone-600 border-stone-200 hover:bg-stone-50'
+                  )}
+                >
+                  <span>{autoShowSpanishGloss ? '✓ Auto-Gloss ES: ON' : 'Auto-Gloss ES'}</span>
+                </button>
+
+                {selectedLanguage !== 'en' && languageCounts.enDue > 0 && (
+                  <button
+                    type="button"
+                    data-testid="spanish-escape-to-english-btn"
+                    onClick={() => handleSelectLanguageTrack('en')}
+                    title="Switch session to English-only queue for faster review"
+                    className="px-2.5 py-1 rounded-lg bg-[#fdf8f6] hover:bg-[#f2e8e5] border border-[#eaddd7] text-[#834832] text-[11px] font-sans font-semibold transition-colors cursor-pointer"
+                  >
+                    Switch to 🇬🇧 English ({languageCounts.enDue})
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {isSpanishGlossVisible && !isAnswerRevealed && (
+              <div
+                data-testid="spanish-gloss-anchor-callout"
+                className="pt-2 border-t border-[#bae6fd]/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs animate-in fade-in"
+              >
+                <div className="space-y-0.5">
+                  <span className="text-[10px] font-sans font-bold uppercase tracking-wider text-[#0369a1]">
+                    English Meaning Anchor (No Penalty)
+                  </span>
+                  <p className="font-serif italic text-sm text-[#0c4a6e] font-medium">
+                    “{currentCard.english_gloss || currentCard.primary_definition}”
+                  </p>
+                </div>
+                <span className="text-[11px] font-sans text-[#0369a1] shrink-0">
+                  POS: <strong>{currentCard.part_of_speech}</strong>
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* --- MODALITY 1: CONTEXTUAL CLOZE FILL (ACT-01) --- */}
         {activeModality === 'ACT-01' && (
           <div className="space-y-6">

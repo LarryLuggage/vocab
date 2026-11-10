@@ -20,14 +20,17 @@ import {
   Check,
   MessageSquare,
 } from 'lucide-react';
-import { CardWithSrs, ProductionLog } from '@/types/lexis';
+import { CardWithSrs, ProductionLog, CognateMatch } from '@/types/lexis';
 import { apiFetch, errorMessageOf, notifyCardsUpdated } from '@/lib/api-client';
 import { getCardStateLabel, formatIntervalDisplay } from '@/lib/fsrs';
 import { formatGenderBadge } from '@/lib/language';
+import { findCrossLingualCognates } from '@/lib/cognates';
 import { cn, extractClozeToken } from '@/lib/utils';
 
 export interface CardInspectorDrawerProps {
   card: CardWithSrs | null;
+  allCards?: CardWithSrs[];
+  onSelectCard?: (cardId: string) => void;
   onClose: () => void;
   onCardUpdated: (updatedCard: CardWithSrs) => void;
   onCardDeleted: (deletedId: string) => void;
@@ -67,6 +70,8 @@ function renderClozeHighlighted(sentence: string) {
 
 export function CardInspectorDrawer({
   card,
+  allCards,
+  onSelectCard,
   onClose,
   onCardUpdated,
   onCardDeleted,
@@ -150,6 +155,8 @@ export function CardInspectorDrawer({
   const genderBadge = isSpanish ? formatGenderBadge(card.gender, card.part_of_speech) : null;
   const dueDate = new Date(card.srs.due);
   const isDue = dueDate.getTime() <= Date.now();
+  const cognateMatches: CognateMatch[] =
+    allCards && allCards.length > 0 ? findCrossLingualCognates(card, allCards, 6) : [];
 
   const handlePlayPronunciation = () => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
@@ -718,6 +725,68 @@ export function CardInspectorDrawer({
                       <span>{card.etymology.cognates.join(', ')}</span>
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Cross-Lingual & Root Siblings in Your Lexicon */}
+              {cognateMatches.length > 0 && (
+                <div className="bg-white border border-[#e7e5e4] rounded-2xl p-5 space-y-3 shadow-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 text-[11px] font-sans font-semibold uppercase tracking-wider text-[#834832]">
+                      <GitBranch className="w-3.5 h-3.5 text-[#834832]" />
+                      <span>Cross-Lingual &amp; Root Siblings in Your Lexicon</span>
+                    </div>
+                    <span className="text-[11px] font-mono text-stone-400">
+                      {cognateMatches.length}{' '}
+                      {cognateMatches.length === 1 ? 'sibling' : 'siblings'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {cognateMatches.map((match) => {
+                      const isMatchSpanish = (match.card.language || 'en') === 'es';
+                      const isCrossLingual = match.relationType === 'cross-lingual';
+
+                      return (
+                        <button
+                          key={match.card.id}
+                          type="button"
+                          onClick={() => onSelectCard?.(match.card.id)}
+                          className="p-3 rounded-xl border border-stone-200 hover:border-[#834832] bg-[#fdf8f6]/50 hover:bg-[#fdf8f6] text-left transition-all space-y-1.5 group cursor-pointer"
+                        >
+                          <div className="flex items-center justify-between gap-1.5 flex-wrap">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-sans font-bold uppercase bg-stone-100 text-stone-700 border border-stone-200">
+                                {isMatchSpanish ? '🇪🇸 ES' : '🇬🇧 EN'}
+                              </span>
+                              <span className="font-serif font-bold text-sm text-[#1c1917] group-hover:text-[#834832] capitalize">
+                                {match.card.term}
+                              </span>
+                            </div>
+
+                            <span
+                              className={cn(
+                                'px-2 py-0.5 rounded-full text-[9px] font-sans font-bold uppercase tracking-wider',
+                                isCrossLingual
+                                  ? 'bg-[#834832]/15 text-[#834832]'
+                                  : 'bg-stone-200/70 text-stone-700'
+                              )}
+                            >
+                              {isCrossLingual ? 'Cross-Lingual Cognate' : 'Root Sibling'}
+                            </span>
+                          </div>
+
+                          <p className="text-[11px] font-sans font-medium text-[#834832]">
+                            {match.matchReason}
+                          </p>
+
+                          <p className="text-xs font-serif text-stone-600 line-clamp-2">
+                            {match.card.primary_definition}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
 

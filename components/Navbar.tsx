@@ -2,15 +2,16 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
-import { BookMarked, Plus, Sparkles, Library, Layers } from 'lucide-react';
+import { usePathname } from 'next/navigation';
+import { BookMarked, Plus, Sparkles, Library, Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { apiFetch, CARDS_UPDATED_EVENT } from '@/lib/api-client';
+import { CommandPaletteModal } from '@/components/CommandPaletteModal';
 
 export default function Navbar() {
   const pathname = usePathname();
-  const router = useRouter();
   const [dueCount, setDueCount] = useState<number>(0);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
 
   const isUnlockPage = pathname === '/unlock';
 
@@ -18,18 +19,12 @@ export default function Navbar() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        if (pathname === '/add') {
-          const input = document.getElementById('term-input') as HTMLInputElement | null;
-          input?.focus();
-          input?.select();
-        } else {
-          router.push('/add');
-        }
+        setIsCommandPaletteOpen((prev) => !prev);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [pathname, router]);
+  }, []);
 
   useEffect(() => {
     if (isUnlockPage) return;
@@ -119,8 +114,21 @@ export default function Navbar() {
             </nav>
           </div>
 
-          {/* Action Button: Quick Capture */}
-          <div className="flex items-center gap-3">
+          {/* Action Buttons: Global Search / Command Palette & Quick Capture */}
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => setIsCommandPaletteOpen(true)}
+              aria-label="Open Search and Command Palette"
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full text-xs sm:text-sm font-medium border border-[#e7e5e4] bg-white hover:bg-stone-50 text-[#57534e] hover:text-[#1c1917] transition-all shadow-2xs font-sans cursor-pointer"
+            >
+              <Search className="w-3.5 h-3.5 text-[#834832]" />
+              <span className="hidden sm:inline font-medium">Search / Command</span>
+              <kbd className="px-1.5 py-0.5 text-[10px] bg-stone-100 text-stone-600 rounded font-mono border border-stone-200">
+                ⌘K
+              </kbd>
+            </button>
+
             <Link
               href="/add"
               className={cn(
@@ -132,9 +140,6 @@ export default function Navbar() {
             >
               <Plus className="w-4 h-4 transition-transform group-hover:rotate-90" />
               <span className="font-medium">Quick Capture</span>
-              <kbd className="hidden sm:inline-block ml-1 px-1.5 py-0.5 text-[10px] bg-[#693522] text-[#eaddd7] rounded font-mono border border-[#9e5f48]/40">
-                ⌘K
-              </kbd>
             </Link>
           </div>
         </div>
@@ -186,6 +191,12 @@ export default function Navbar() {
           </Link>
         </div>
       </nav>
+
+      {/* Global Command Palette Modal */}
+      <CommandPaletteModal
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+      />
     </>
   );
 }

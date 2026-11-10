@@ -56,6 +56,7 @@ A streamlined, private, zero-friction vocabulary operating system designed exclu
 | **SRS-01** | FSRS Algorithm Integration | Implement `ts-fsrs` to govern scheduling. Track stability, difficulty, state, and last_review. | P0 |
 | **SRS-02** | Rating Controls | Standard 4-button grading: Again (1), Hard (2), Good (3), Easy (4). | P0 |
 | **SRS-03** | Queue Management | Dedicated `/review` dashboard prioritizing cards where `due <= current_timestamp`. | P0 |
+| **SRS-04** | Language Track Switcher & Pacing | Toggle between `🇬🇧 English Only`, `🇪🇸 Español Only`, and `🌐 All Languages` (`[L]` hotkey, `?language=en\|es`, `localStorage` persistence, `"English First"` ordering, card deferral, and non-penalizing Spanish English Gloss Hint `[H]`). | P0 |
 
 ### 3.3 Active Practice Modalities
 | Feature ID | Feature Name | Description | Priority |
@@ -169,5 +170,11 @@ CREATE INDEX IF NOT EXISTS idx_vocab_term ON vocab_cards (term);
 - **Phase 6: Reader Passage & Highlight Bulk Extractor (`ING-09`) & Custom Pack Studio (`CUR-03`) (Complete)**:
   - Reader Passage & Book Highlight Bulk Extractor (`/add?mode=passage`, `lib/llm/passage-extractor.ts`, `POST /api/extract-passage`, `POST /api/cards/batch`) allowing users to paste long-form essays or multi-highlight blocks, auto-extract C1/C2 candidates with exact passage sentences and Zotero/book citations, and batch-ingest novel cards while merging sightings into existing cards.
   - Custom Curated Pack Studio & Topic Generator (`components/CustomPackModal.tsx`, `lib/db/thematic-packs.ts`, `lib/llm/pack-generator.ts`, `GET & POST /api/cards/packs`) adding 4 new 10-card Thematic Domain Packs (*Aesthetics & Poetics*, *Political Economy & Critical Theory*, *Phenomenology & Mind*, and *Boom Latinoamericano & Realismo Mágico*) plus an AI Topic Generator for custom EN/ES domain packs.
+
+- **Phase 7: Prose Polisher (`ACT-05`), Global `⌘K` Command Palette, Writing Portfolio & Cross-Lingual Cognate Bridge (Complete)**:
+  - Writing Revision & Register Coach (`ACT-05: Prose Polisher`, `components/WritingPortfolio.tsx`, `lib/llm/prose-polisher.ts`, `POST /api/polish-prose`) enabling users to paste draft essays in English or Spanish, receive targeted C1/C2 lexicon substitutions from their personal vocabulary library with register rationale, copy elevated prose, and commit revisions directly into their `production_logs` archive.
+  - Chronological Active Production & Synthesis Portfolio (`/lexicon?view=portfolio`, `GET /api/production-logs`) aggregating all composed sentences (`ACT-03`), multi-word weaves (`ACT-04`), and committed prose revisions (`ACT-05`) with language/status filtering and 1-click Markdown journal export.
+  - Global `⌘K` / `Ctrl+K` Command Palette & Instant Lexicon Search (`components/CommandPaletteModal.tsx`, `components/Navbar.tsx`) providing keyboard-first live search across headwords, definitions, roots, and authors, instant capture routing (`/add?term=...`), and studio navigation commands from any screen.
+  - Cross-Lingual Etymological Cognate & Root Sibling Bridge (`lib/cognates.ts`, `components/CardInspectorDrawer.tsx`) dynamically linking English and Spanish lexicon entries that share Latin, Greek, or Andalusi Arabic morphemes or explicit cognates inside the Card Inspector Drawer.
 
 
