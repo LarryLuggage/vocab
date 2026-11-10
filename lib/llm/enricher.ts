@@ -3,6 +3,7 @@ import {
   LexicalEnrichmentPayload,
 } from './schema';
 import { CURATED_LEXICON } from './curated-lexicon';
+import { fisherYatesShuffle, type RandomSource } from '@/lib/distinction-quiz';
 
 // ============================================================================
 // Common Morphological Knowledge Base (Greek & Latin)
@@ -791,7 +792,8 @@ export const GEMINI_RESPONSE_SCHEMA = {
 export function normalizeLexicalPayload(
   raw: any,
   targetTerm: string,
-  detectedLang?: 'en' | 'es'
+  detectedLang?: 'en' | 'es',
+  random: RandomSource = Math.random
 ): LexicalEnrichmentPayload {
   if (!raw || typeof raw !== 'object') {
     throw new Error('Raw enrichment data is not an object');
@@ -885,7 +887,9 @@ export function normalizeLexicalPayload(
   let distinction_matrix = null;
   if (rawMatrix && typeof rawMatrix === 'object') {
     const rawSynonyms = Array.isArray(rawMatrix.synonyms) ? rawMatrix.synonyms : [];
-    const synonyms = rawSynonyms.map((s: any) => String(s)).filter(Boolean);
+    const synonyms: string[] = rawSynonyms
+      .map((s: any) => String(s).trim())
+      .filter((s: string) => s.length > 0);
     if (!synonyms.includes(term)) synonyms.unshift(term);
 
     const nuanceComparison =
@@ -917,8 +921,12 @@ export function normalizeLexicalPayload(
       ),
     }));
 
+    // The model lists synonyms in a stable order (the target is usually first or
+    // in the middle). Shuffle after parsing so that order is not an answer key.
+    // The quiz shuffles again at display time and grades by the term, not the slot.
+    const parsedSynonyms: string[] = synonyms.length > 0 ? synonyms : [term, 'counterpart'];
     distinction_matrix = {
-      synonyms: synonyms.length > 0 ? synonyms : [term, 'counterpart'],
+      synonyms: fisherYatesShuffle<string>(parsedSynonyms, random),
       nuanceComparison,
       contextRecommendations:
         contextRecommendations.length > 0

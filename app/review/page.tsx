@@ -57,24 +57,23 @@ import {
   parseReviewLanguageParam,
 } from '@/lib/review-queue';
 import { cn, extractClozeToken } from '@/lib/utils';
+import { buildDistinctionQuiz, gradeDistinctionChoice } from '@/lib/distinction-quiz';
+import {
+  REVIEW_MODALITIES,
+  REVIEW_MODALITY_LABELS,
+  emptyAttemptStats,
+  isReviewModality,
+  modalityForCard,
+  overallAccuracy,
+  reconcileMixedPlan,
+  recordReviewAttempt,
+  type AttemptStats,
+  type MixedPlan,
+  type ReviewModality,
+  type ReviewSessionMode,
+} from '@/lib/review-mix';
 
-type ModalityMode = 'ACT-01' | 'ACT-02' | 'ACT-03' | 'ACT-04';
-
-function deterministicShuffle<T>(items: T[], seedStr: string): T[] {
-  const arr = [...items];
-  let hash = 2166136261;
-  for (let i = 0; i < seedStr.length; i++) {
-    hash ^= seedStr.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  for (let i = arr.length - 1; i > 0; i--) {
-    hash ^= i + 0x9e3779b9;
-    hash = Math.imul(hash, 16777619);
-    const j = Math.abs(hash) % (i + 1);
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
+type ModalityMode = ReviewModality;
 
 function CardFullDetails({
   card,
@@ -244,6 +243,15 @@ export default function ReviewPage() {
     return null;
   });
 
+  // Session statistics. Attempts are counted per question type so a cloze
+  // miss does not move the distinction score.
+  const [reviewedCount, setReviewedCount] = useState(0);
+  const [attemptStats, setAttemptStats] = useState<AttemptStats>(emptyAttemptStats);
+  const [sessionNonce, setSessionNonce] = useState(0);
+
+  // 'mixed' interleaves question types. A ?modality=ACT-0N link keeps one type.
+  const [sessionMode, setSessionMode] = useState<ReviewSessionMode>('mixed');
+
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -292,13 +300,8 @@ export default function ReviewPage() {
         // Ignore storage access errors
       }
 
-      if (
-        modalityParam === 'ACT-01' ||
-        modalityParam === 'ACT-02' ||
-        modalityParam === 'ACT-03' ||
-        modalityParam === 'ACT-04'
-      ) {
-        setActiveModality(modalityParam);
+      if (isReviewModality(modalityParam)) {
+        setSessionMode(modalityParam);
       }
       if (cardId || root || source) {
         setActiveFilter((prev) => {
@@ -388,13 +391,20 @@ export default function ReviewPage() {
     });
   }, []);
 
-  // Session Statistics
-  const [reviewedCount, setReviewedCount] = useState(0);
-  const [correctAttempts, setCorrectAttempts] = useState(0);
-  const [totalAttempts, setTotalAttempts] = useState(0);
-
-  // Active Modality Mode
-  const [activeModality, setActiveModality] = useState<ModalityMode>('ACT-01');
+  // One question type per card for this session. Removing cards (synthesis
+  // batch grading) keeps the remaining assignments; a new queue replans.
+  const mixedPlanRef = React.useRef<MixedPlan | null>(null);
+  const queueKey = queue.map((card) => card.id).join('\n');
+  const planNonce = `${sessionNonce}:${selectedLanguage}`;
+  const companionPoolSize = Math.max(queue.length, rawQueue.length);
+  const mixedPlan = useMemo(() => {
+    if (sessionMode !== 'mixed') return null;
+    return reconcileMixedPlan(mixedPlanRef.current, queue, Math.random, {
+      companionPoolSize,
+      nonce: planNonce,
+    });
+  }, [sessionMode, queue, queueKey, planNonce, companionPoolSize]);
+  mixedPlanRef.current = mixedPlan;
 
   // Modality 1: Cloze state
   const [clozeSentenceIndex, setClozeSentenceIndex] = useState(0);
@@ -466,6 +476,8 @@ export default function ReviewPage() {
         setRawQueue(res.data);
         setCurrentIndex(0);
         setSessionCompleted(res.data.length === 0);
+        setSessionNonce((nonce) => nonce + 1);
+        setAttemptStats(emptyAttemptStats());
       } catch (err) {
         setLoadError(errorMessageOf(err, 'Failed to load the review queue.'));
       } finally {
@@ -490,6 +502,9 @@ export default function ReviewPage() {
 
   // Current Card
   const currentCard: CardWithSrs | undefined = queue[currentIndex];
+  const activeModality: ModalityMode =
+    modalityForCard(mixedPlan, currentCard?.id, sessionMode) ??
+    (sessionMode === 'mixed' ? 'ACT-03' : sessionMode);
 
   // Defer / Skip the current card to the end of the queue without rating it
   const handleDeferCurrentCard = useCallback(() => {
@@ -613,62 +628,22 @@ export default function ReviewPage() {
     setClozeChecked(true);
     setIsAnswerRevealed(true);
 
-    setTotalAttempts((prev) => prev + 1);
-    if (isMatch) setCorrectAttempts((prev) => prev + 1);
+    setAttemptStats((prev) => recordReviewAttempt(prev, 'ACT-01', isMatch));
   };
 
-  // Distinction matrix dynamic question and options
+  // Distinction matrix question. Choices are shuffled once per card; the
+  // correct answer is the term itself, not a fixed button index.
   const distinctionData = useMemo(() => {
     if (!currentCard) return null;
-    const seed = `${currentCard.id}:${currentCard.srs.reps}:${currentIndex}`;
-
-    if (currentCard.distinction_matrix) {
-      const matrix = currentCard.distinction_matrix;
-      const targetRecommendation =
-        matrix.contextRecommendations.find(
-          (r) => r.word.toLowerCase() === currentCard.term.toLowerCase()
-        ) || matrix.contextRecommendations[0];
-
-      const rawOptions =
-        matrix.synonyms && matrix.synonyms.length > 0
-          ? matrix.synonyms
-          : [currentCard.term, 'general synonym', 'colloquial parallel'];
-
-      return {
-        promptTone: targetRecommendation
-          ? targetRecommendation.recommendedRegister
-          : 'High Literary & Scholarly Register',
-        options: deterministicShuffle(rawOptions, seed),
-        correctWord: currentCard.term,
-        comparison: matrix.nuanceComparison,
-        recommendations: matrix.contextRecommendations,
-      };
-    }
-
-    // Fallback distinction trio if not explicitly pre-configured
-    const fallbackOptions = [currentCard.term, 'general synonym', 'colloquial parallel'];
-    return {
-      promptTone: 'High Literary & Scholarly Register',
-      options: deterministicShuffle(fallbackOptions, seed),
-      correctWord: currentCard.term,
-      comparison: `"${currentCard.term}" provides refined connotative precision suitable for literary and academic prose.`,
-      recommendations: [
-        {
-          word: currentCard.term,
-          recommendedRegister: 'Literary & Scholarly Register',
-          exampleSentence: `The scholar noted the ${currentCard.term} nature of the passage.`,
-        },
-      ],
-    };
-  }, [currentCard, currentIndex]);
+    return buildDistinctionQuiz(currentCard);
+  }, [currentCard]);
 
   // Handle distinction selection
   const handleSelectSynonym = (chosenWord: string) => {
     if (!distinctionData || selectedSynonym) return;
     setSelectedSynonym(chosenWord);
 
-    const isCorrect =
-      chosenWord.toLowerCase() === distinctionData.correctWord.toLowerCase();
+    const isCorrect = gradeDistinctionChoice(chosenWord, distinctionData.correctWord);
 
     const isSpanish = (currentCard?.language || 'en') === 'es';
     const explanation = isCorrect
@@ -684,8 +659,7 @@ export default function ReviewPage() {
       explanation,
     });
 
-    setTotalAttempts((prev) => prev + 1);
-    if (isCorrect) setCorrectAttempts((prev) => prev + 1);
+    setAttemptStats((prev) => recordReviewAttempt(prev, 'ACT-02', isCorrect));
     setIsAnswerRevealed(true);
   };
 
@@ -705,10 +679,9 @@ export default function ReviewPage() {
       setProductionResult(result);
       setIsAnswerRevealed(true);
       setShowSandboxHints(true);
-      setTotalAttempts((prev) => prev + 1);
-      if (result.evaluationStatus === 'pass') {
-        setCorrectAttempts((prev) => prev + 1);
-      }
+      setAttemptStats((prev) =>
+        recordReviewAttempt(prev, 'ACT-03', result.evaluationStatus === 'pass')
+      );
     } catch {
       setProductionResult({
         evaluationStatus: 'awkward',
@@ -737,10 +710,9 @@ export default function ReviewPage() {
       setSynthesisResult(result);
       setIsAnswerRevealed(true);
       setShowSynthesisDrawer(true);
-      setTotalAttempts((prev) => prev + 1);
-      if (result.evaluationStatus === 'pass') {
-        setCorrectAttempts((prev) => prev + 1);
-      }
+      setAttemptStats((prev) =>
+        recordReviewAttempt(prev, 'ACT-04', result.evaluationStatus === 'pass')
+      );
     } catch {
       const detected = synthesisCards
         .filter((c) => synthesisWordDetection[c.id])
@@ -861,12 +833,14 @@ export default function ReviewPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
     handleRevealAnswer,
+    handleRateCard,
     handleSelectLanguageTrack,
     selectedLanguage,
     currentIndex,
     queue,
     currentCard,
     isSavingRating,
+    activeModality,
   ]);
 
   // Progress percentage
@@ -1078,8 +1052,7 @@ export default function ReviewPage() {
       );
     }
 
-    const accuracy =
-      totalAttempts > 0 ? Math.round((correctAttempts / totalAttempts) * 100) : 100;
+    const accuracy = overallAccuracy(attemptStats);
 
     return (
       <div className="max-w-2xl mx-auto py-12 px-4 text-center space-y-8 animate-in fade-in duration-300">
@@ -1181,6 +1154,26 @@ export default function ReviewPage() {
             </p>
           </div>
         </div>
+
+        {REVIEW_MODALITIES.some((modality) => attemptStats[modality].total > 0) && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-left">
+            {REVIEW_MODALITIES.filter((modality) => attemptStats[modality].total > 0).map(
+              (modality) => (
+                <div
+                  key={modality}
+                  className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2"
+                >
+                  <p className="text-[10px] font-sans uppercase tracking-wider text-stone-500">
+                    {REVIEW_MODALITY_LABELS[modality]}
+                  </p>
+                  <p className="font-serif text-lg text-[#1c1917]">
+                    {attemptStats[modality].correct}/{attemptStats[modality].total}
+                  </p>
+                </div>
+              )
+            )}
+          </div>
+        )}
 
         {/* Action Buttons */}
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
@@ -1319,64 +1312,18 @@ export default function ReviewPage() {
         </div>
       </div>
 
-      {/* Modality Mode Selector Tabs */}
-      <div className="flex items-center justify-between border-b border-[#e7e5e4] pb-2 overflow-x-auto gap-3">
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setActiveModality('ACT-01')}
-            className={cn(
-              'px-3 py-1.5 rounded-full text-xs font-sans font-medium transition-all whitespace-nowrap',
-              activeModality === 'ACT-01'
-                ? 'bg-[#834832] text-white shadow-sm'
-                : 'text-[#57534e] hover:bg-stone-200/60'
-            )}
-          >
-            ACT-01: Contextual Cloze
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveModality('ACT-02')}
-            className={cn(
-              'px-3 py-1.5 rounded-full text-xs font-sans font-medium transition-all whitespace-nowrap',
-              activeModality === 'ACT-02'
-                ? 'bg-[#834832] text-white shadow-sm'
-                : 'text-[#57534e] hover:bg-stone-200/60'
-            )}
-          >
-            ACT-02: Distinction Matrix
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveModality('ACT-03')}
-            className={cn(
-              'px-3 py-1.5 rounded-full text-xs font-sans font-medium transition-all whitespace-nowrap',
-              activeModality === 'ACT-03'
-                ? 'bg-[#834832] text-white shadow-sm'
-                : 'text-[#57534e] hover:bg-stone-200/60'
-            )}
-          >
-            ACT-03: Production Sandbox
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveModality('ACT-04')}
-            className={cn(
-              'px-3 py-1.5 rounded-full text-xs font-sans font-medium transition-all whitespace-nowrap',
-              activeModality === 'ACT-04'
-                ? 'bg-[#834832] text-white shadow-sm'
-                : 'text-[#57534e] hover:bg-stone-200/60'
-            )}
-          >
-            ACT-04: Synthesis Weave
-          </button>
-
+      {/* Current question in the mixed session. Type is assigned, not picked. */}
+      <div className="flex items-center justify-between border-b border-[#e7e5e4] pb-2 gap-3">
+        <div className="flex items-center gap-2 min-w-0 flex-wrap">
+          <span className="px-2.5 py-1 rounded-full bg-[#f2e8e5] text-[#834832] text-[11px] font-sans font-semibold uppercase tracking-wider shrink-0">
+            {sessionMode === 'mixed' ? 'Mixed session' : 'Single type'}
+          </span>
+          <span className="text-sm font-serif text-[#1c1917] truncate">
+            {REVIEW_MODALITY_LABELS[activeModality]}
+          </span>
           <Link
             href="/lexicon?view=portfolio"
-            className="px-3 py-1.5 rounded-full text-xs font-sans font-semibold transition-all whitespace-nowrap text-[#834832] bg-[#fdf8f6] border border-[#eaddd7] hover:bg-[#f2e8e5]"
+            className="px-2.5 py-1 rounded-full text-xs font-sans font-semibold transition-all whitespace-nowrap text-[#834832] bg-[#fdf8f6] border border-[#eaddd7] hover:bg-[#f2e8e5]"
           >
             ACT-05: Prose Polisher ↗
           </Link>
@@ -1661,8 +1608,7 @@ export default function ReviewPage() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {distinctionData.options.map((option, idx) => {
                 const isSelected = selectedSynonym === option;
-                const isCorrectWord =
-                  option.toLowerCase() === distinctionData.correctWord.toLowerCase();
+                const isCorrectWord = gradeDistinctionChoice(option, distinctionData.correctWord);
 
                 let cardStyle =
                   'border-stone-200 bg-stone-50/60 hover:bg-stone-100 hover:border-stone-300 text-stone-900';
