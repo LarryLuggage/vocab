@@ -3,6 +3,10 @@ import { getDueCards, recordReview, getCardById } from '@/lib/db';
 import { getSchedulePreviews } from '@/lib/fsrs';
 import { FSRSRating } from '@/types/lexis';
 import { DEFAULT_USER_ID } from '@/lib/db/seed-data';
+import {
+  computeLanguageQueueCounts,
+  parseReviewLanguageParam,
+} from '@/lib/review-queue';
 
 export async function GET(req: NextRequest) {
   try {
@@ -11,13 +15,28 @@ export async function GET(req: NextRequest) {
     const asOfParam = searchParams.get('asOf');
     const asOf = asOfParam ? new Date(asOfParam) : new Date();
     const languageParam = searchParams.get('language') || undefined;
-    const language = languageParam && languageParam !== 'all' ? languageParam : undefined;
+    const parsedLang = parseReviewLanguageParam(languageParam);
+    const language =
+      parsedLang && parsedLang !== 'all'
+        ? parsedLang
+        : languageParam && languageParam.toLowerCase().trim() !== 'all'
+        ? languageParam.toLowerCase().trim()
+        : undefined;
     const cardId = searchParams.get('cardId') || undefined;
     const root = searchParams.get('root') || undefined;
     const source = searchParams.get('source') || undefined;
     const includeAll = searchParams.get('includeAll') === 'true';
     const limit = searchParams.get('limit') ? parseInt(searchParams.get('limit')!, 10) : undefined;
     const includePreviews = searchParams.get('includePreviews') === 'true';
+
+    const allPoolCards = language
+      ? await getDueCards(userId, asOf, {
+          cardId,
+          root,
+          source,
+          includeAll,
+        })
+      : null;
 
     let dueCards = await getDueCards(userId, asOf, {
       language,
@@ -26,6 +45,7 @@ export async function GET(req: NextRequest) {
       source,
       includeAll,
     });
+    const counts = computeLanguageQueueCounts(allPoolCards ?? dueCards);
     if (limit) {
       dueCards = dueCards.slice(0, limit);
     }
@@ -43,6 +63,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       success: true,
       count: data.length,
+      counts,
       asOf: asOf.toISOString(),
       filter: {
         language: language || null,

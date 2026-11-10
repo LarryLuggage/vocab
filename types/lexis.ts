@@ -107,3 +107,42 @@ export interface ProductionValidationResult {
   termsDetected?: string[];
   missingTerms?: string[];
 }
+
+export interface ProsePolishSuggestion {
+  cardId: string;
+  term: string;
+  language: 'en' | 'es';
+  part_of_speech: string;
+  originalFragment: string;
+  elevatedReplacement: string;
+  rationale: string;
+  primary_definition: string;
+}
+
+export interface ProsePolishResult {
+  originalDraft: string;
+  elevatedDraft: string;
+  registerDetected: string;
+  editorialSummary: string;
+  suggestions: ProsePolishSuggestion[];
+  detectedLanguage: 'en' | 'es';
+  mode: 'gemini' | 'heuristic';
+}
+
+export interface ProductionLogWithCard extends ProductionLog {
+  card?: Pick<
+    VocabCard,
+    'id' | 'term' | 'language' | 'part_of_speech' | 'primary_definition' | 'phonetic'
+  > | null;
+}
+
+export interface CognateMatch {
+  card: CardWithSrs;
+  relationType: 'cross-lingual' | 'same-language-root';
+  sharedRoot?: {
+    morpheme: string;
+    meaning: string;
+    origin: string;
+  };
+  matchReason: string;
+}

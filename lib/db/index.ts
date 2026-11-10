@@ -4,6 +4,7 @@ import {
   SrsCard,
   CardWithSrs,
   ProductionLog,
+  ProductionLogWithCard,
   EvaluationStatus,
   FSRSRating,
 } from '@/types/lexis';
@@ -977,4 +978,49 @@ export async function listAllProductionLogs(
     grouped[log.card_id].push(log);
   }
   return grouped;
+}
+
+export async function listAllProductionLogsWithCards(
+  userId: string = DEFAULT_USER_ID,
+  limit: number = 100
+): Promise<ProductionLogWithCard[]> {
+  const [cards, groupedLogs] = await Promise.all([
+    listCards({ userId }),
+    listAllProductionLogs(userId),
+  ]);
+
+  const cardMap = new Map<
+    string,
+    Pick<
+      VocabCard,
+      'id' | 'term' | 'language' | 'part_of_speech' | 'primary_definition' | 'phonetic'
+    >
+  >();
+
+  for (const c of cards) {
+    cardMap.set(c.id, {
+      id: c.id,
+      term: c.term,
+      language: c.language || 'en',
+      part_of_speech: c.part_of_speech,
+      primary_definition: c.primary_definition,
+      phonetic: c.phonetic ?? null,
+    });
+  }
+
+  const flattened: ProductionLogWithCard[] = [];
+  for (const logs of Object.values(groupedLogs)) {
+    for (const log of logs) {
+      flattened.push({
+        ...log,
+        card: cardMap.get(log.card_id) || null,
+      });
+    }
+  }
+
+  flattened.sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
+
+  return flattened.slice(0, Math.max(1, limit));
 }
